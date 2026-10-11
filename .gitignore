@@ -1,3 +1,8 @@
 server/
 backups/
 host.config.ps1
+cloud/.env
+cloud/data/
+cloud/state/
+cloud/backups/
+__pycache__/
