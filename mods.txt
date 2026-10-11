@@ -1,0 +1,7 @@
+# Modrinth project slugs, one per line (the part after modrinth.com/mod/). Run .\setup.ps1 to install.
+# Server-side performance mods (friends don't need these):
+fabric-api
+lithium
+ferrite-core
+# Add gameplay mods below. Mods that add blocks/items must ALSO be installed by every player.
+# Server-only extras you may like: fabric-permissions-api, ledger, vanish
