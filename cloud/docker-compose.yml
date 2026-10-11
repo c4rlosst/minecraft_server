@@ -1,0 +1,95 @@
+# Aternos-style SMP: the controller owns the public port, wakes the Minecraft container when a whitelisted
+# player joins, and puts it to sleep when it's empty. See README.md.
+services:
+  mc:
+    image: itzg/minecraft-server:${MC_IMAGE_TAG:-java25}
+    container_name: smp-mc
+    restart: "no"            # the controller starts/stops it; it stays asleep after a reboot
+    environment:
+      EULA: "${EULA:?Set EULA=TRUE in .env after reading https://aka.ms/MinecraftEULA}"
+      TYPE: FABRIC
+      VERSION: "${MC_VERSION:-26.3}"
+      MEMORY: "${MC_MEMORY:-6G}"
+      MODRINTH_PROJECTS: "${MODS:-fabric-api,lithium,ferrite-core}"
+      MODRINTH_DOWNLOAD_DEPENDENCIES: required
+      MOTD: "${SERVER_NAME:-Our SMP}"
+      MAX_PLAYERS: "${MAX_PLAYERS:-10}"
+      ONLINE_MODE: "true"
+      ENABLE_WHITELIST: "true"
+      ENFORCE_WHITELIST: "true"
+      OPS: "${OPS:-}"
+      ENABLE_RCON: "true"
+      RCON_PASSWORD: "${RCON_PASSWORD:?Set RCON_PASSWORD in .env (run: bash init.sh)}"
+      VIEW_DISTANCE: "10"
+      SIMULATION_DISTANCE: "8"
+    volumes:
+      - ./data:/data
+    expose:
+      - "25565"
+      - "25575"
+
+  controller:
+    build: ./controller
+    container_name: smp-controller
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      MC_HOST: mc
+      MC_CONTAINER: smp-mc
+    ports:
+      - "25565:25565"                                   # Minecraft (public)
+      - "${PANEL_BIND:-0.0.0.0}:8080:8080"              # web panel
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock       # lets the controller start/stop smp-mc
+      - ./data:/data:ro                                 # reads whitelist.json
+      - ./state:/state
+    depends_on:
+      - mc
+
+  backup:
+    image: itzg/mc-backup
+    container_name: smp-backup
+    restart: unless-stopped
+    environment:
+      BACKUP_INTERVAL: "6h"
+      INITIAL_DELAY: "10m"
+      PRUNE_BACKUPS_DAYS: "14"
+      PAUSE_IF_NO_PLAYERS: "true"       # no backup while nobody played
+      SERVER_HOST: mc
+      RCON_HOST: mc
+      RCON_PASSWORD: "${RCON_PASSWORD}"
+    volumes:
+      - ./data:/data:ro
+      - ./backups:/backups
+    depends_on:
+      - mc
+
+  # `docker compose --profile playit up -d`  (same address as the Windows setup, no port opening needed)
+  playit:
+    profiles: ["playit"]
+    image: ghcr.io/playit-cloud/playit-agent:latest
+    container_name: smp-playit
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      SECRET_KEY: "${PLAYIT_SECRET_KEY:?Set PLAYIT_SECRET_KEY in .env}"
+
+  # `docker compose --profile https up -d`  (HTTPS for the panel; needs PANEL_DOMAIN pointing at this server)
+  caddy:
+    profiles: ["https"]
+    image: caddy:2
+    container_name: smp-caddy
+    restart: unless-stopped
+    environment:
+      PANEL_DOMAIN: "${PANEL_DOMAIN:?Set PANEL_DOMAIN in .env}"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    depends_on:
+      - controller
+
+volumes:
+  caddy_data:

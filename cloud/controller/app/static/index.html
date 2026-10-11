@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SMP Control Panel</title>
+<style>
+  :root {
+    --bg: #f4f5f7; --card: #ffffff; --text: #1b1f24; --muted: #667085; --line: #e3e6ea;
+    --accent: #2f6fed; --asleep: #8a94a3; --starting: #d98a00; --online: #1a9a52; --error: #d64545;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0f1318; --card: #181e26; --text: #e8ecf1; --muted: #93a0b2; --line: #2a323d; --accent: #5b8cff;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.5 system-ui, sans-serif; }
+  main { max-width: 640px; margin: 0 auto; padding: 24px 16px 64px; }
+  h1 { font-size: 1.4rem; margin: 0 0 4px; }
+  h2 { font-size: 1rem; margin: 0 0 12px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin-top: 16px; }
+  .muted { color: var(--muted); font-size: .9rem; }
+  .badge { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; font-size: 1.2rem; text-transform: capitalize; }
+  .dot { width: 12px; height: 12px; border-radius: 50%; background: var(--asleep); }
+  [data-state="starting"] .dot, [data-state="stopping"] .dot { background: var(--starting); animation: pulse 1.2s infinite; }
+  [data-state="online"] .dot { background: var(--online); }
+  [data-state="error"] .dot { background: var(--error); }
+  @keyframes pulse { 50% { opacity: .35; } }
+  button { font: inherit; border: 1px solid var(--line); background: var(--card); color: var(--text);
+           border-radius: 8px; padding: 8px 14px; cursor: pointer; min-height: 40px; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  input { font: inherit; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px;
+          background: var(--bg); color: var(--text); min-height: 40px; max-width: 100%; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 12px; }
+  code, pre { font-family: ui-monospace, Consolas, monospace; }
+  pre { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px;
+        max-height: 280px; overflow: auto; font-size: .78rem; white-space: pre-wrap; margin: 12px 0 0; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .chip { background: var(--bg); border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; font-size: .85rem; }
+  .err { color: var(--error); min-height: 1.2em; margin-top: 8px; font-size: .9rem; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1 id="title">SMP Control Panel</h1>
+  <div class="muted" id="address"></div>
+
+  <section id="login" class="card" hidden>
+    <h2>Log in</h2>
+    <form class="row" id="login-form">
+      <input type="password" id="password" placeholder="Panel password" autocomplete="current-password" required>
+      <button class="primary" type="submit">Log in</button>
+    </form>
+    <div class="err" id="login-err"></div>
+  </section>
+
+  <div id="panel" hidden>
+    <section class="card" id="status-card" data-state="asleep">
+      <div class="badge"><span class="dot"></span><span id="state">asleep</span></div>
+      <div class="muted" id="detail"></div>
+      <div class="chips" id="players"></div>
+      <div class="row">
+        <button class="primary" id="start">Start server</button>
+        <button id="stop">Stop server</button>
+        <button id="logout" style="margin-left:auto">Log out</button>
+      </div>
+      <div class="err" id="action-err"></div>
+    </section>
+
+    <section class="card">
+      <h2>Whitelist</h2>
+      <div class="chips" id="whitelist"></div>
+      <form class="row" id="wl-form">
+        <input id="wl-name" placeholder="Minecraft name" maxlength="16" pattern="[A-Za-z0-9_]{1,16}" required>
+        <button type="submit" data-op="add" class="primary">Add</button>
+        <button type="submit" data-op="remove">Remove</button>
+      </form>
+      <div class="muted" id="wl-note"></div>
+    </section>
+
+    <section class="card">
+      <h2>Console log</h2>
+      <button id="logs-btn">Refresh log</button>
+      <pre id="logs" hidden></pre>
+    </section>
+  </div>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+let timer = null;
+
+async function api(path, options = {}) {
+  const res = await fetch(path, { credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, ...options });
+  const body = await res.json().catch(() => ({}));
+  if (res.status === 401 && path !== '/api/login') showLogin();
+  if (!res.ok) throw new Error(body.error || res.statusText);
+  return body;
+}
+
+function showLogin() {
+  $('panel').hidden = true; $('login').hidden = false; clearInterval(timer);
+  api('/api/public').then(p => { $('title').textContent = p.server_name; $('address').textContent = p.address; }).catch(() => {});
+}
+
+function render(s) {
+  $('title').textContent = s.server_name;
+  $('address').textContent = s.address ? 'Join with: ' + s.address : '';
+  $('status-card').dataset.state = s.state;
+  $('state').textContent = s.state;
+  let detail = '';
+  if (s.state === 'online') {
+    detail = `${s.players}/${s.max_players} players` + (s.version ? ` · ${s.version}` : '');
+    if (s.sleeps_in !== null) detail += ` · sleeps in ~${Math.floor(s.sleeps_in / 60) + 1} min if empty`;
+  } else if (s.state === 'asleep') detail = 'Join the server or press Start to wake it.';
+  else if (s.state === 'starting') detail = 'Loading the world, about a minute.';
+  else if (s.state === 'stopping') detail = 'Saving the world.';
+  if (s.error) detail += ' ' + s.error;
+  $('detail').textContent = detail;
+  $('players').replaceChildren(...s.names.map(n => Object.assign(document.createElement('span'), { className: 'chip', textContent: n })));
+  $('start').disabled = s.state !== 'asleep';
+  $('stop').disabled = !['online', 'starting'].includes(s.state);
+}
+
+async function poll() {
+  try { render(await api('/api/status')); } catch (e) { if (e.message !== 'Not logged in') $('detail').textContent = e.message; }
+}
+
+async function loadWhitelist() {
+  const w = await api('/api/whitelist');
+  const chips = w.names.map(n => ['', n]);
+  w.pending.add.forEach(n => chips.push(['+ ', n]));
+  $('whitelist').replaceChildren(...chips.map(([p, n]) => Object.assign(document.createElement('span'), { className: 'chip', textContent: p + n })));
+  const queued = w.pending.add.length + w.pending.remove.length;
+  $('wl-note').textContent = queued ? `${queued} change(s) will apply when the server next starts.` : '';
+}
+
+async function enter() {
+  $('login').hidden = true; $('panel').hidden = false;
+  await poll(); loadWhitelist().catch(() => {});
+  clearInterval(timer); timer = setInterval(poll, 3000);
+}
+
+$('login-form').addEventListener('submit', async (e) => {
+  e.preventDefault(); $('login-err').textContent = '';
+  try { await api('/api/login', { method: 'POST', body: JSON.stringify({ password: $('password').value }) }); $('password').value = ''; enter(); }
+  catch (err) { $('login-err').textContent = err.message; }
+});
+$('logout').addEventListener('click', async () => { await api('/api/logout', { method: 'POST' }).catch(() => {}); showLogin(); });
+for (const [id, path] of [['start', '/api/start'], ['stop', '/api/stop']]) {
+  $(id).addEventListener('click', async () => {
+    if (id === 'stop' && !confirm('Stop the server for everyone?')) return;
+    $('action-err').textContent = '';
+    try { render(await api(path, { method: 'POST' })); } catch (e) { $('action-err').textContent = e.message; }
+  });
+}
+$('wl-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const op = e.submitter.dataset.op;
+  try { await api('/api/whitelist', { method: 'POST', body: JSON.stringify({ op, name: $('wl-name').value.trim() }) }); $('wl-name').value = ''; loadWhitelist(); }
+  catch (err) { $('wl-note').textContent = err.message; }
+});
+$('logs-btn').addEventListener('click', async () => {
+  try { const { logs } = await api('/api/logs'); const pre = $('logs'); pre.hidden = false; pre.textContent = logs; pre.scrollTop = pre.scrollHeight; }
+  catch (e) { $('action-err').textContent = e.message; }
+});
+
+api('/api/status').then(s => { enter(); }).catch(showLogin);
+</script>
+</body>
+</html>
