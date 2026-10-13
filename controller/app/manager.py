@@ -7,7 +7,7 @@ import os
 import re
 import time
 
-from . import mcproto
+from . import mcproto, offline
 from . import rcon as rcon_module
 
 log = logging.getLogger("manager")
@@ -33,6 +33,9 @@ class Manager:
         self._lock = asyncio.Lock()
         self._pending_path = os.path.join(cfg.state_dir, "pending_whitelist.json")
         self.pending = self._load_pending()
+        # Offline accounts can't be checked against Mojang, so the whitelist is off in that mode: players are
+        # protected by their EasyAuth passwords instead.
+        self.whitelist_on = cfg.account_mode != "offline"
 
     # ---- state machine -------------------------------------------------------------------------
     def _reset(self):
@@ -112,6 +115,8 @@ class Manager:
                 return False
             log.info("Starting server")
             previous = self.state
+            if not self.whitelist_on:
+                self._write_offline_ops()
             await asyncio.to_thread(self.runtime.start, self.cfg.mc_container)
             self._reset()
             self.started_at = self.clock()
@@ -169,6 +174,17 @@ class Manager:
         except OSError:
             log.exception("could not save pending whitelist")
 
+    def _write_offline_ops(self):
+        names = [n.strip() for n in self.cfg.ops.split(",") if NAME_RE.match(n.strip())]
+        try:
+            offline.ensure_ops(os.path.join(os.path.dirname(self.cfg.whitelist_path), "ops.json"), names)
+        except OSError:
+            log.exception("could not write ops.json")
+
+    def is_allowed(self, name: str) -> bool:
+        """May this player wake/join? Everyone, unless the whitelist is on."""
+        return (not self.whitelist_on) or name.lower() in self.allowed_names()
+
     def whitelist_file_names(self) -> list[str]:
         try:
             with open(self.cfg.whitelist_path) as f:
@@ -184,10 +200,15 @@ class Manager:
 
     async def whitelist_change(self, op: str, name: str) -> str:
         """Returns 'applied' (server online) or 'queued' (applied the next time it starts)."""
+        if not self.whitelist_on:
+            raise ValueError("The whitelist is off in offline mode: players protect their name with /register and "
+                             "/login. Use `.\\set-account-mode.ps1 -Online` to go back to a whitelist.")
         if op not in ("add", "remove") or not NAME_RE.match(name or ""):
             raise ValueError("Use add/remove with a valid Minecraft name (3-16 letters, digits, underscore).")
         if self.state == "online":
-            await self.rcon(self.cfg.mc_host, self.cfg.rcon_port, self.cfg.rcon_password, f"whitelist {op} {name}")
+            reply = await self.rcon(self.cfg.mc_host, self.cfg.rcon_port, self.cfg.rcon_password, f"whitelist {op} {name}")
+            if "does not exist" in reply.lower():
+                raise ValueError(f"'{name}' isn't a real Minecraft account. Check the spelling (and that they own the game).")
             return "applied"
         other = "remove" if op == "add" else "add"
         self.pending[other] = [n for n in self.pending[other] if n.lower() != name.lower()]
@@ -197,6 +218,8 @@ class Manager:
         return "queued"
 
     async def _apply_ops(self):
+        if not self.whitelist_on:
+            return   # offline mode: ops.json was written with offline UUIDs before the server started
         for name in (n.strip() for n in self.cfg.ops.split(",")):
             if NAME_RE.match(name):
                 try:
@@ -205,12 +228,14 @@ class Manager:
                     log.exception("could not op %s", name)
 
     async def _apply_pending(self):
-        if not (self.pending["add"] or self.pending["remove"]):
+        if not self.whitelist_on or not (self.pending["add"] or self.pending["remove"]):
             return
         for op in ("add", "remove"):
             for name in list(self.pending[op]):
                 try:
-                    await self.rcon(self.cfg.mc_host, self.cfg.rcon_port, self.cfg.rcon_password, f"whitelist {op} {name}")
+                    reply = await self.rcon(self.cfg.mc_host, self.cfg.rcon_port, self.cfg.rcon_password, f"whitelist {op} {name}")
+                    if "does not exist" in reply.lower():
+                        log.warning("Whitelist %s '%s' dropped: not a real Minecraft account", op, name)
                     self.pending[op].remove(name)
                 except Exception:
                     log.exception("could not apply whitelist %s %s yet", op, name)
@@ -232,4 +257,5 @@ class Manager:
             "error": self.last_error,
             "server_name": self.cfg.server_name,
             "address": self.cfg.public_address,
+            "whitelist": self.whitelist_on,
         }

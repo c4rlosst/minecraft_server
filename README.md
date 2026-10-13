@@ -59,10 +59,34 @@ uses almost nothing.
   1.9+ combat rules, and a mod that adds new blocks/items breaks cross-version join (those mods also need every
   player to install them). Stay with server-only mods if you want everyone to join with vanilla.
 - Add friends to the whitelist with the panel (`http://127.0.0.1:8080`, password from `controller.env`) or the
-  Discord command `/whitelist-add name`.
+  Discord command `/whitelist-add name`. (Not needed in offline mode, see below.)
 - A whitelisted friend joins while the server sleeps -> sees "Waking the server up!" -> reconnects about a minute
   later. After `IDLE_MINUTES` (10) with nobody online it saves, backs up the world and sleeps.
-- Strangers can't wake the server, and the real server is only reachable through the controller.
+- Strangers can't wake the server (with the whitelist on), and the real server is only reachable through the
+  controller.
+
+## Offline (non-Microsoft) accounts
+
+By default only accounts verified by Mojang can join (`online-mode=true`, whitelist on). If friends use offline
+launcher accounts, switch the server to offline mode (close the controller window first):
+
+```powershell
+.\set-account-mode.ps1 -Offline      # and  -Online  to switch back
+.\run-controller.ps1
+```
+
+The script stops the Minecraft server itself, turns off the account check **and the whitelist**, and installs
+**EasyAuth**: every player protects their name with a password, `/register <password> <password>` the first time and
+`/login <password>` after that. Operators come from `OPS` in `controller.env`. (The whitelist stays off in this mode
+because `/whitelist add` would store the online ID for real accounts, which never matches the offline ID players join
+with. `-Online` brings the whitelist back with the same names.)
+
+**Why the passwords matter:** without account verification, anyone who knows a name could join *as* that player,
+including the operator, and since there's no whitelist anyone with the address can try to join and register. Keep
+the address private. Whoever registers a name first owns it, so **join and register the operator account before you
+tell anyone the address.** Admin commands (operators only): `/auth list`, `/auth update <name> <newpassword>` (reset a
+password), `/auth remove <name>`. For a shared "door code" instead of per-player passwords, EasyAuth has an
+`enableGlobalPassword` option in `config/EasyAuth/main.conf` (set it with `/auth setGlobalPassword <password>`).
 
 ## Discord bot (optional)
 
@@ -92,6 +116,11 @@ Keep the token private. Anyone with it controls your bot.
 
 - **Logs:** `server\logs\latest.log` (Minecraft) and the controller window / `.\run-controller.ps1` output.
 - **Won't wake:** the name must be on the whitelist (`server\whitelist.json`); check the controller is running.
+- **"Can't connect" or "Connection reset" on the tunnel address:** always join with the tunnel *name*, never its IP
+  (playit routes by hostname, so an IP join is cut off). If the name doesn't resolve on a PC
+  (`Resolve-DnsName your-name.tun.ply.gg` says "does not exist"), its DNS is stale or blocking it: run
+  `ipconfig /flushdns`, restart the router, or put `8.8.8.8` first in that PC's DNS settings.
+- **Whitelist add says "isn't a real Minecraft account":** the name must be an existing Microsoft/Mojang account.
 - **Friends can't connect:** is the playit agent running and showing your tunnel as online? Is the PC awake?
 - **Backups:** `backups\`, one per sleep, the newest 14 kept. To restore, stop the server and replace `server\world`.
 - **Tests:** `cd controller; python -m unittest discover -s tests -t . -v`

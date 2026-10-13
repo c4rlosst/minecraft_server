@@ -13,3 +13,6 @@ viarewind
 
 # Add gameplay mods below. Mods that add blocks/items must ALSO be installed by every player, and they
 # will stop older-version clients from joining (ViaVersion can't translate modded content).
+
+# Passwords for players on an offline-mode server (added by set-account-mode.ps1)
+easyauth

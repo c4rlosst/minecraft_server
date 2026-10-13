@@ -98,7 +98,7 @@ class Gateway:
             return
         name = proto.parse_login_name(data)
         state = self.manager.state
-        if name.lower() not in self.manager.allowed_names():
+        if not self.manager.is_allowed(name):
             message, color = "You are not whitelisted on this server.", "red"
         elif state == "asleep":
             try:

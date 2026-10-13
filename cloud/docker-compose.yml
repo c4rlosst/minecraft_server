@@ -14,7 +14,7 @@ services:
       MODRINTH_DOWNLOAD_DEPENDENCIES: required
       MOTD: "${SERVER_NAME:-Our SMP}"
       MAX_PLAYERS: "${MAX_PLAYERS:-10}"
-      ONLINE_MODE: "true"
+      ONLINE_MODE: "${ONLINE_MODE:-true}"   # false = offline accounts; then also add easyauth to MODS (passwords)
       ENABLE_WHITELIST: "true"
       ENFORCE_WHITELIST: "true"
       OPS: "${OPS:-}"
