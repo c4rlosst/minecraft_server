@@ -1,86 +1,85 @@
-# Friends SMP (Fabric, Java Edition)
+# Friends SMP: Aternos-style server on one Windows PC
 
-Self-hosted modded Minecraft server for this Windows PC.
-
-> **Want an Aternos-style server** (sleeps when empty, wakes when a friend joins, web panel + Discord bot)?
-> See [cloud/README.md](cloud/README.md). The rest of this file is the Windows, run-it-on-a-PC setup.
-
-## Quick start
-
-```powershell
-.\setup.ps1     # downloads Fabric + mods from mods.txt, asks you to accept the EULA
-.\start.ps1     # runs the server (auto-restarts on crash)
-```
-
-In the server console:
+A modded Fabric Minecraft server that **sleeps when nobody is online and wakes when a whitelisted friend joins**.
+A small background program (the *controller*) owns the public port, starts and stops the real server, keeps the
+whitelist, takes a backup every time the server sleeps, and talks to your friends through a Discord bot.
 
 ```
-whitelist add FriendName
-op YourName
+friends -> playit.gg tunnel -> controller (port 25565) -> Minecraft (hidden, port 25566)
+                                  ^        ^
+                  Discord bot ----+        +---- web panel (this PC only)
 ```
 
-Everyone joins with the **same Minecraft version** (default `26.3`) and the Fabric loader. Easiest way for friends:
-install [Prism Launcher](https://prismlauncher.org) -> new instance -> Fabric, then drop any gameplay mods into it.
+The PC must be **on, with Windows sleep turned off**, for the server and bot to work. While the server is asleep it
+uses almost nothing.
 
-## Letting friends connect (pick one)
+## Set up
 
-| Option | Cost | Notes |
-|---|---|---|
-| **Port forward 25565 (TCP)** on your router to this PC, share your public IP | Free | Exposes your home IP; public IP can change. |
-| **[playit.gg](https://playit.gg) tunnel** | Free | No router access needed, hides your IP. Install their agent, create a Minecraft Java tunnel. |
-| **[Tailscale](https://tailscale.com)** | Free | Private; every friend installs it and joins your tailnet, then connects to your Tailscale IP. |
+1. **Install the server** (downloads Fabric + the mods in [mods.txt](mods.txt), asks you to accept the
+   [Minecraft EULA](https://aka.ms/MinecraftEULA)):
+   ```powershell
+   .\setup.ps1
+   ```
+2. **Edit `controller.env`** (created by step 1): set `PUBLIC_ADDRESS` to your playit.gg tunnel address and `OPS` to your
+   Minecraft name. Your panel password is in this file too.
+3. **Install the controller** (creates a Python environment; downloads aiohttp and discord.py):
+   ```powershell
+   .\install-controller.ps1
+   ```
+4. **Try it in this window:**
+   ```powershell
+   .\run-controller.ps1
+   ```
+5. **Make it start automatically** whenever you log in to Windows, and turn off sleep (Settings -> System ->
+   Power -> Screen and sleep -> "Never" for sleep when plugged in):
+   ```powershell
+   .\install-controller.ps1 -Startup
+   Start-ScheduledTask -TaskName "SMP Controller"
+   ```
+   Undo it any time with `.\install-controller.ps1 -Remove`.
 
-Allow the port through Windows Firewall (run PowerShell as Administrator, once):
+## Playing
 
-```powershell
-New-NetFirewallRule -DisplayName "Minecraft SMP" -Direction Inbound -Protocol TCP -LocalPort 25565 -Action Allow
-```
+- Friends use **plain vanilla Minecraft Java, any version from 1.8 to 26.3**, and your tunnel address. No Fabric or
+  mods needed: the server-side mods ViaFabric + ViaBackwards + ViaRewind translate between versions.
+  (If you remove those three from [mods.txt](mods.txt), everyone must be on 26.3.)
+- Old-version caveats: newer blocks and mobs show up as look-alikes for old clients, 1.8 players get the server's
+  1.9+ combat rules, and a mod that adds new blocks/items breaks cross-version join (those mods also need every
+  player to install them). Stay with server-only mods if you want everyone to join with vanilla.
+- Add friends to the whitelist with the panel (`http://127.0.0.1:8080`, password from `controller.env`) or the
+  Discord command `/whitelist-add name`.
+- A whitelisted friend joins while the server sleeps -> sees "Waking the server up!" -> reconnects about a minute
+  later. After `IDLE_MINUTES` (10) with nobody online it saves, backs up the world and sleeps.
+- Strangers can't wake the server, and the real server is only reachable through the controller.
 
-## Mods
+## Discord bot (optional)
 
-Add Modrinth slugs to `mods.txt` and re-run `.\setup.ps1`. Slugs with no Fabric build for the current version are
-skipped with a warning. New Minecraft versions often lag on mods, so check that your must-have mods exist before
-bumping `-McVersion`. Mods that add content must be installed by every player; performance mods (the defaults) are
-server-only.
+1. https://discord.com/developers/applications -> **New Application** -> **Bot** -> copy the token into
+   `DISCORD_TOKEN` in `controller.env`.
+2. **OAuth2 -> URL Generator**: tick `bot` and `applications.commands`, open the link and add the bot to your server.
+3. In Discord enable Developer Mode (Settings -> Advanced), right-click your server -> **Copy Server ID** into
+   `DISCORD_GUILD_ID`. Right-click a channel -> **Copy Channel ID** into `DISCORD_CHANNEL_ID` to get "server is
+   online / went to sleep" announcements. Set `DISCORD_ROLE_ID` to limit who can start/stop.
+4. Restart the controller. Commands: `/status`, `/start`, `/stop`, `/whitelist-add`, `/whitelist-remove`.
 
-## Any friend can host (shared world)
+Keep the token private. Anyone with it controls your bot.
 
-The world lives in a cloud folder (Google Drive / Dropbox / OneDrive) shared with everyone who may host. Only one
-person can host at a time; `host.ps1` handles the handoff.
+## Files
 
-**One-time, on each host PC**
-1. Install the cloud app and sync the shared folder to disk ("Available offline" / "Mirror files").
-2. Clone this repo, install Java, run `.\setup.ps1`.
-3. Copy `host.config.example.ps1` to `host.config.ps1` and set `$SharedDir` and `$HostName`.
-4. Same address for everyone (playit.gg). Do this **once, by one person**: make a free playit.gg account, install the
-   agent (`winget install DevelopedMethods.playit`), create an agent + a **Minecraft Java** tunnel pointing at local
-   port 25565, and note the tunnel address friends will use. Then give every host the agent's **secret key**
-   privately (never in git or the shared cloud folder) and put it in `$PlayitSecret` in `host.config.ps1`.
-   `host.ps1` then starts the agent with that key (`SECRET_KEY`), so the address is identical whoever hosts.
-   The agent must only run on one PC at a time, which the host lock already guarantees.
-   Note: playit's docs show `SECRET_KEY` only for their Docker image. If a host's agent asks you to sign in or
-   claim a new agent instead, tell me and I'll adjust to what your version needs.
+| File | What it does |
+|---|---|
+| `setup.ps1` | Downloads Fabric + mods, writes `server.properties` (private port, RCON), creates `controller.env` |
+| `install-controller.ps1` | Python environment; `-Startup` starts it at login |
+| `run-controller.ps1` | Runs the controller and the playit.gg agent |
+| `mods.txt` | Modrinth mod slugs. Re-run `setup.ps1` after editing. Content mods must be installed by every player |
+| `controller/` | The controller (Python) and its tests |
+| `start.ps1`, `backup.ps1` | Manual start / manual backup, only for troubleshooting |
+| `cloud/` | The same idea in Docker for a rented/always-on Linux server |
 
-**Each session**
-```powershell
-.\host.ps1 -Status   # who's hosting right now?
-.\host.ps1           # take the lock, pull the world, start server + tunnel
-```
-Type `stop` in the console when done. The script then uploads the world and frees the lock. Wait until your cloud
-app shows "synced" before shutting down the PC, and don't close the window early.
+## Troubleshooting
 
-**Safety rules**
-- The shared folder holds the world, `mods/`, `config/`, whitelist/ops/bans and `server.properties`, so every host
-  runs identical content. Change mods or settings on whichever PC is hosting; they propagate on the next handoff.
-- The lock is cooperative (cloud sync isn't instant): say "hosting now" in your group chat anyway.
-- The next host's script waits until its synced copy matches the last upload, so it never starts on a half-synced world.
-- Crashed PC? After 5 min without a heartbeat, `.\host.ps1 -Force` lets someone else take over using the last
-  uploaded world. Anything that PC hadn't uploaded is lost, so start the crashed PC again if you can.
-- A local backup is taken before every pull. Also run `.\backup.ps1` once in a while.
-
-## Keeping it healthy
-
-- `.\backup.ps1` zips the world into `backups\` (keeps the last 14). Schedule it with Task Scheduler.
-- `.\start.ps1 -Ram 8G` changes memory (default 6G; leave a few GB for Windows).
-- Server settings live in `server\server.properties`; your edits survive re-running setup.
-- The PC must stay on (and not sleep) while people play. A cheap VPS later is just: copy this folder, run setup, start.
+- **Logs:** `server\logs\latest.log` (Minecraft) and the controller window / `.\run-controller.ps1` output.
+- **Won't wake:** the name must be on the whitelist (`server\whitelist.json`); check the controller is running.
+- **Friends can't connect:** is the playit agent running and showing your tunnel as online? Is the PC awake?
+- **Backups:** `backups\`, one per sleep, the newest 14 kept. To restore, stop the server and replace `server\world`.
+- **Tests:** `cd controller; python -m unittest discover -s tests -t . -v`

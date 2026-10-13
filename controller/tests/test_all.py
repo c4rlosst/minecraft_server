@@ -4,11 +4,15 @@ import asyncio
 import json
 import os
 import struct
+import sys
 import tempfile
 import unittest
+import zipfile
 
 from app import mcproto as proto
+from app.backups import make_backup
 from app.config import Config
+from app.procctl import ProcessServer
 from app.dockerctl import _demux
 from app.gateway import Gateway
 from app.manager import Manager
@@ -117,6 +121,32 @@ class GatewayTests(unittest.TestCase):
         self.assertEqual(first[0], 0)
         self.assertIn("Waking", first[1])
         self.assertIn("starting", second[1])
+        self.assertEqual(manager.starts, 1)
+
+    def test_old_and_new_client_protocols_get_status_and_wake_message(self):
+        # 1.7.x=5, 1.8.x=47, 1.12.2=340, 1.20.4=765, 26.3 (this repo's tests use 800)
+        async def one(port, protocol):
+            r, w = await asyncio.open_connection("127.0.0.1", port)
+            w.write(handshake(1, protocol) + proto.frame(0))
+            _, data = await read_frame(r)
+            status = json.loads(proto.decode_string(data, 0, 1 << 20)[0])
+            w.close()
+            r, w = await asyncio.open_connection("127.0.0.1", port)
+            w.write(handshake(2, protocol) + proto.frame(0, proto.encode_string("Steve")))  # 1.8 login: name only
+            _, data = await read_frame(r)
+            text = json.loads(proto.decode_string(data, 0, 4096)[0])["text"]
+            w.close()
+            return status["version"]["protocol"], text
+
+        async def go():
+            manager = StubManager("asleep")
+            async with Served(manager) as s:
+                results = {p: await one(s.port, p) for p in (5, 47, 340, 765, 800)}
+            return manager, results
+        manager, results = run(go())
+        for protocol, (echoed, text) in results.items():
+            self.assertEqual(echoed, protocol)
+            self.assertTrue("Waking" in text or "starting" in text)
         self.assertEqual(manager.starts, 1)
 
     def test_unlisted_join_does_not_wake(self):
@@ -333,6 +363,105 @@ class ManagerTests(unittest.TestCase):
         with open(self.cfg.whitelist_path, "w") as f:
             json.dump([{"uuid": "1", "name": "Steve"}], f)
         self.assertEqual(self.manager.allowed_names(), {"steve"})
+
+    def test_ops_applied_once_when_server_comes_up_and_bad_names_skipped(self):
+        self.cfg.ops = "Alex, bad name;x"
+
+        async def go():
+            await self.manager.start()
+            self.info = {"players": {"online": 0, "max": 10}}
+            await self.manager.refresh()
+            await self.manager.refresh()
+        run(go())
+        self.assertEqual(self.rcon_calls, ["op Alex"])
+
+    def test_state_changes_are_announced_and_backup_runs_after_stop(self):
+        events, backups = [], []
+
+        async def on_change(old, new):
+            events.append((old, new))
+
+        async def after_stop():
+            backups.append(self.docker.status)   # server must already be stopped when the backup runs
+
+        async def go():
+            m = self.manager
+            m.on_change, m.after_stop = on_change, after_stop
+            await m.start()
+            self.info = {"players": {"online": 0, "max": 10}}
+            await m.refresh()
+            await m.stop()
+            await m._stop_task
+            await asyncio.sleep(0)   # let notification tasks run
+        run(go())
+        self.assertEqual(events, [("asleep", "starting"), ("starting", "online"),
+                                  ("online", "stopping"), ("stopping", "asleep")])
+        self.assertEqual(backups, ["exited"])
+
+
+class FakeJava(ProcessServer):
+    def _command(self):
+        return [sys.executable, "-c", "import time; time.sleep(120)"]
+
+
+class ProcessServerTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.cfg = Config(state_dir=os.path.join(self.tmp.name, "state"), server_dir=os.path.join(self.tmp.name, "server"),
+                          mc_host="127.0.0.1", rcon_port=1, rcon_password="x")  # port 1: nothing listens
+        os.makedirs(self.cfg.server_dir)
+        self.server = FakeJava(self.cfg)
+        self.addCleanup(lambda: self.server.stop(grace=1))
+
+    def test_start_stop_lifecycle_and_pid_file(self):
+        self.assertEqual(self.server.state(), "exited")
+        self.server.start()
+        self.assertEqual(self.server.state(), "running")
+        self.server.start()                       # starting twice must not spawn a second process
+        self.server.stop(grace=30)                # RCON is unreachable, so it falls back to killing
+        self.assertEqual(self.server.state(), "exited")
+        self.assertFalse(os.path.exists(self.server.pid_file))
+
+    def test_stale_pid_file_means_exited(self):
+        os.makedirs(self.cfg.state_dir)
+        with open(self.server.pid_file, "w") as f:
+            f.write("999999")
+        self.assertEqual(self.server.state(), "exited")
+
+    def test_logs_tail(self):
+        os.makedirs(os.path.join(self.cfg.server_dir, "logs"))
+        with open(os.path.join(self.cfg.server_dir, "logs", "latest.log"), "w") as f:
+            f.write("\n".join(f"line {i}" for i in range(500)))
+        self.assertEqual(self.server.logs(tail=3).splitlines(), ["line 497", "line 498", "line 499"])
+        self.assertIn("no log yet", ProcessServer(Config(server_dir=self.tmp.name + "x")).logs())
+
+    def test_missing_jar_gives_clear_error(self):
+        with self.assertRaises(RuntimeError) as ctx:
+            ProcessServer(self.cfg).start()
+        self.assertIn("setup.ps1", str(ctx.exception))
+
+
+class BackupTests(unittest.TestCase):
+    def test_zip_and_prune(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            server, backups = os.path.join(tmp, "server"), os.path.join(tmp, "backups")
+            os.makedirs(os.path.join(server, "world", "region"))
+            with open(os.path.join(server, "world", "level.dat"), "w") as f:
+                f.write("data")
+            os.makedirs(backups)
+            for day in ("2020-01-01", "2020-01-02", "2020-01-03"):
+                open(os.path.join(backups, f"world-{day}_00-00-00.zip"), "w").close()
+            archive = make_backup(server, backups, keep=2)
+            self.assertTrue(zipfile.is_zipfile(archive))
+            with zipfile.ZipFile(archive) as z:
+                self.assertIn("level.dat", z.namelist())
+            self.assertEqual(len(os.listdir(backups)), 2)
+            self.assertIn(os.path.basename(archive), os.listdir(backups))
+
+    def test_no_world_means_no_backup(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertIsNone(make_backup(tmp, os.path.join(tmp, "b")))
 
 
 if __name__ == "__main__":

@@ -1,6 +1,8 @@
 server/
 backups/
-host.config.ps1
+state/
+controller.env
+controller/.venv/
 cloud/.env
 cloud/data/
 cloud/state/

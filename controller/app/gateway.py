@@ -101,9 +101,13 @@ class Gateway:
         if name.lower() not in self.manager.allowed_names():
             message, color = "You are not whitelisted on this server.", "red"
         elif state == "asleep":
-            await self.manager.start()
-            log.info("%s woke the server", name)
-            message, color = "Waking the server up! Reconnect in about a minute.", "yellow"
+            try:
+                await self.manager.start()
+                log.info("%s woke the server", name)
+                message, color = "Waking the server up! Reconnect in about a minute.", "yellow"
+            except Exception:
+                log.exception("could not start the server")
+                message, color = "The server failed to start. Tell the admin.", "red"
         elif state == "starting":
             message, color = "The server is starting up. Reconnect in a minute.", "yellow"
         elif state == "stopping":

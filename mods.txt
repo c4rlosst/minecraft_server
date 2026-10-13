@@ -3,5 +3,13 @@
 fabric-api
 lithium
 ferrite-core
-# Add gameplay mods below. Mods that add blocks/items must ALSO be installed by every player.
-# Server-only extras you may like: fabric-permissions-api, ledger, vanish
+
+# Multi-version join: lets clients from 1.8 up to the server's version connect with plain vanilla.
+# ViaFabric bundles ViaVersion (newer clients); ViaBackwards + ViaRewind add older clients (1.8.x / 1.7.x).
+# Delete these three lines if you only want the server's own version to join.
+viafabric
+viabackwards
+viarewind
+
+# Add gameplay mods below. Mods that add blocks/items must ALSO be installed by every player, and they
+# will stop older-version clients from joining (ViaVersion can't translate modded content).
