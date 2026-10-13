@@ -100,6 +100,8 @@ class Gateway:
         state = self.manager.state
         if not self.manager.is_allowed(name):
             message, color = "You are not whitelisted on this server.", "red"
+        elif getattr(self.manager, "maintenance", False):
+            message, color = "The server's mods are being updated. Try again in a minute.", "yellow"
         elif state == "asleep":
             try:
                 await self.manager.start()

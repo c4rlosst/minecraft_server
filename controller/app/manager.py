@@ -30,6 +30,7 @@ class Manager:
         self.last_error = None
         self._stopping = False
         self._stop_task = None
+        self.maintenance = False   # True while mods are being changed: the server must not start meanwhile
         self._lock = asyncio.Lock()
         self._pending_path = os.path.join(cfg.state_dir, "pending_whitelist.json")
         self.pending = self._load_pending()
@@ -111,7 +112,7 @@ class Manager:
     # ---- actions -------------------------------------------------------------------------------
     async def start(self) -> bool:
         async with self._lock:
-            if self.state != "asleep":
+            if self.state != "asleep" or self.maintenance:
                 return False
             log.info("Starting server")
             previous = self.state
@@ -123,6 +124,17 @@ class Manager:
             self.state = "starting"
             self._notify(previous)
             return True
+
+    async def begin_maintenance(self) -> bool:
+        """Reserve the server for a mods change. Only possible while it's asleep; blocks it from starting."""
+        async with self._lock:
+            if self.state != "asleep" or self.maintenance:
+                return False
+            self.maintenance = True
+            return True
+
+    def end_maintenance(self):
+        self.maintenance = False
 
     async def stop(self) -> bool:
         async with self._lock:
@@ -258,4 +270,6 @@ class Manager:
             "server_name": self.cfg.server_name,
             "address": self.cfg.public_address,
             "whitelist": self.whitelist_on,
+            "maintenance": self.maintenance,
+            "mods_enabled": bool(self.cfg.server_dir),   # only the Windows/process backend manages the mods folder
         }

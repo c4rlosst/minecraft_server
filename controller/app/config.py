@@ -35,6 +35,7 @@ class Config:
     # process backend
     server_dir: str = ""
     java_path: str = "java"
+    mc_version: str = ""
     mc_memory: str = "6G"
     backup_dir: str = ""
     backups_keep: int = 14
@@ -72,6 +73,7 @@ class Config:
             docker_socket=env("DOCKER_SOCKET", "/var/run/docker.sock"),
             server_dir=env("SERVER_DIR", ""),
             java_path=env("JAVA_PATH", "") or "java",
+            mc_version=env("MC_VERSION", "").strip(),
             mc_memory=env("MC_MEMORY", "6G"),
             backup_dir=env("BACKUP_DIR", ""),
             backups_keep=_int("BACKUPS_KEEP", 14),

@@ -65,6 +65,23 @@ uses almost nothing.
 - Strangers can't wake the server (with the whitelist on), and the real server is only reachable through the
   controller.
 
+## Adding mods from the panel
+
+The panel has a **Mods** card: upload a `.jar`, a `.zip` of jars, or a Modrinth `.mrpack` (from modrinth.com, via
+"Download" on a modpack page), and remove installed mods. Only possible while the server is **asleep** (press
+Stop server first). Changes apply the next time it starts.
+
+- Only **Fabric** mods for the server's Minecraft version are accepted (a Forge/NeoForge jar is refused with a
+  message). Client-only mods are skipped, an updated version of an installed mod replaces the old one.
+- `.mrpack` files: mods are downloaded from Modrinth/GitHub, checked against their published hashes, and the pack's
+  config files are applied (only into `mods`, `config` and `defaultconfigs`).
+- Replaced or removed jars are moved to `server\mods-removed`, not deleted.
+- **Mods run as code on this PC**: only upload mods you trust. The panel is protected by your panel password and is
+  only reachable from this PC.
+- Mods that add blocks or items need **every player to install them** (Fabric + the same mods) and break
+  joining from older versions. World-generation mods like Terralith work with vanilla clients.
+- You can also add mods by listing their Modrinth slug in [mods.txt](mods.txt) and running `.\setup.ps1`.
+
 ## Offline (non-Microsoft) accounts
 
 By default only accounts verified by Mojang can join (`online-mode=true`, whitelist on). If friends use offline
