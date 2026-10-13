@@ -15,8 +15,10 @@ NAME_RE = re.compile(r"^[A-Za-z0-9_]{1,16}$")
 
 
 class Manager:
-    def __init__(self, cfg, docker, ping=mcproto.ping_server, rcon=rcon_module.rcon, clock=time.monotonic):
-        self.cfg, self.docker, self.ping, self.rcon, self.clock = cfg, docker, ping, rcon, clock
+    def __init__(self, cfg, runtime, ping=mcproto.ping_server, rcon=rcon_module.rcon, clock=time.monotonic):
+        self.cfg, self.runtime, self.ping, self.rcon, self.clock = cfg, runtime, ping, rcon, clock
+        self.after_stop = None   # optional async callable, runs once the server has fully stopped (e.g. backup)
+        self.on_change = None    # optional async callable(old_state, new_state), e.g. Discord announcements
         self.state = "asleep"
         self.players = 0
         self.max_players = 0
@@ -38,13 +40,25 @@ class Manager:
         self.started_at = self.online_at = self.last_active = None
         self._stopping = False
 
+    def _notify(self, previous: str):
+        if self.on_change and self.state != previous:
+            asyncio.create_task(self._safe_notify(previous, self.state))
+
+    async def _safe_notify(self, old: str, new: str):
+        try:
+            await self.on_change(old, new)
+        except Exception:
+            log.exception("state change listener failed")
+
     async def refresh(self):
         async with self._lock:
+            previous = self.state
             await self._refresh()
+            self._notify(previous)
 
     async def _refresh(self):
         cfg, now = self.cfg, self.clock()
-        status = await asyncio.to_thread(self.docker.state, cfg.mc_container)
+        status = await asyncio.to_thread(self.runtime.state, cfg.mc_container)
         if status == "missing":
             self.state, self.last_error = "error", f"Container '{cfg.mc_container}' not found"
             self._reset()
@@ -74,6 +88,7 @@ class Manager:
         self.version = (info.get("version") or {}).get("name", "")
         if self.online_at is None:
             self.online_at, self.last_active = now, now
+            await self._apply_ops()
             await self._apply_pending()
         self.state = "stopping" if self._stopping else "online"
         if self.players > 0:
@@ -96,17 +111,21 @@ class Manager:
             if self.state != "asleep":
                 return False
             log.info("Starting server")
-            await asyncio.to_thread(self.docker.start, self.cfg.mc_container)
+            previous = self.state
+            await asyncio.to_thread(self.runtime.start, self.cfg.mc_container)
             self._reset()
             self.started_at = self.clock()
             self.state = "starting"
+            self._notify(previous)
             return True
 
     async def stop(self) -> bool:
         async with self._lock:
             if self.state not in ("online", "starting"):
                 return False
+            previous = self.state
             self._begin_stop()
+            self._notify(previous)
             return True
 
     def _begin_stop(self):
@@ -115,17 +134,23 @@ class Manager:
         self._stop_task = asyncio.create_task(self._do_stop())
 
     async def _do_stop(self):
+        stopped = False
         try:
-            await asyncio.to_thread(self.docker.stop, self.cfg.mc_container, self.cfg.stop_grace)
+            await asyncio.to_thread(self.runtime.stop, self.cfg.mc_container, self.cfg.stop_grace)
+            stopped = True
         except Exception as exc:
             log.exception("stop failed")
             self.last_error = str(exc)
-        finally:
-            self._stopping = False
+        if stopped and self.after_stop:
             try:
-                await self.refresh()
+                await self.after_stop()
             except Exception:
-                log.exception("refresh after stop failed")
+                log.exception("after-stop task failed")
+        self._stopping = False
+        try:
+            await self.refresh()
+        except Exception:
+            log.exception("refresh after stop failed")
 
     # ---- whitelist -----------------------------------------------------------------------------
     def _load_pending(self) -> dict:
@@ -170,6 +195,14 @@ class Manager:
             self.pending[op].append(name)
         self._save_pending()
         return "queued"
+
+    async def _apply_ops(self):
+        for name in (n.strip() for n in self.cfg.ops.split(",")):
+            if NAME_RE.match(name):
+                try:
+                    await self.rcon(self.cfg.mc_host, self.cfg.rcon_port, self.cfg.rcon_password, f"op {name}")
+                except Exception:
+                    log.exception("could not op %s", name)
 
     async def _apply_pending(self):
         if not (self.pending["add"] or self.pending["remove"]):

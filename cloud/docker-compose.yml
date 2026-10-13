@@ -10,7 +10,7 @@ services:
       TYPE: FABRIC
       VERSION: "${MC_VERSION:-26.3}"
       MEMORY: "${MC_MEMORY:-6G}"
-      MODRINTH_PROJECTS: "${MODS:-fabric-api,lithium,ferrite-core}"
+      MODRINTH_PROJECTS: "${MODS:-fabric-api,lithium,ferrite-core,viafabric,viabackwards,viarewind}"
       MODRINTH_DOWNLOAD_DEPENDENCIES: required
       MOTD: "${SERVER_NAME:-Our SMP}"
       MAX_PLAYERS: "${MAX_PLAYERS:-10}"
@@ -29,7 +29,7 @@ services:
       - "25575"
 
   controller:
-    build: ./controller
+    build: ../controller
     container_name: smp-controller
     restart: unless-stopped
     env_file: .env

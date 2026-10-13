@@ -96,10 +96,11 @@ Commands: `/status`, `/start`, `/stop`, `/whitelist-add name`, `/whitelist-remov
 - The server sees every player as coming from the controller, so IP bans are useless. Use name bans/whitelist.
 - Tested here with simulated clients and servers only. Test a real join, sleep and wake on 26.3 before inviting
   everyone, and tell me what you see if a step misbehaves.
-- The old Windows scripts in the repo root still work for a one-PC setup; this folder is the always-on alternative.
+- The controller code lives in `../controller` and is shared with the Windows one-PC setup in the repo root. This
+  folder is the always-on Linux alternative.
 
 ## Developing
 
 ```bash
-cd controller && python -m unittest discover -s tests -t . -v
+cd ../controller && python -m unittest discover -s tests -t . -v
 ```

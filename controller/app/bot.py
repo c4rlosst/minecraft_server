@@ -76,6 +76,21 @@ async def run_bot(cfg, manager):
     async def whitelist_remove(interaction: discord.Interaction, name: str):
         await whitelist(interaction, "remove", name)
 
+    async def announce(old: str, new: str):
+        channel = client.get_channel(cfg.discord_channel_id) if cfg.discord_channel_id else None
+        if channel is None:
+            return
+        snap = manager.snapshot()
+        text = {
+            "starting": "Waking the server up...",
+            "online": "The server is **online**." + (f" Join with `{snap['address']}`" if snap["address"] else ""),
+            "asleep": "The server went back to sleep." if old == "stopping" else None,
+        }.get(new)
+        if text:
+            await channel.send(text)
+
+    manager.on_change = announce
+
     @client.event
     async def on_ready():
         await tree.sync(guild=guild)
