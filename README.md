@@ -1,4 +1,4 @@
-# Friends SMP (Fabric, Java Edition)
+ # Friends SMP (Fabric, Java Edition)
 
 Self-hosted modded Minecraft server for this Windows PC.
 
