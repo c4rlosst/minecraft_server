@@ -108,6 +108,7 @@ PLAYIT_EXE=playit
 "@ | Set-Content $controllerEnv -Encoding ascii
     Write-Host "Created controller.env. Panel password (also saved in that file): $panelPassword"
 }
+if (Test-Path $controllerEnv) { Set-Prop $controllerEnv "MC_VERSION" $McVersion }   # lets the panel check uploaded modpacks
 
 # --- Mods from Modrinth -------------------------------------------------------------------
 $modsDir = Join-Path $server "mods"

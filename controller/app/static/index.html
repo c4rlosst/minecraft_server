@@ -81,6 +81,22 @@
       <div class="muted" id="wl-note"></div>
     </section>
 
+    <section class="card" id="mods-card" hidden>
+      <h2>Mods</h2>
+      <div class="muted" id="mods-note"></div>
+      <div id="mods-list"></div>
+      <form class="row" id="mods-form">
+        <input type="file" id="mods-file" accept=".jar,.zip,.mrpack" multiple required>
+        <button type="submit" class="primary" id="mods-upload">Upload</button>
+      </form>
+      <div id="mods-result" class="muted" style="white-space: pre-wrap"></div>
+      <div class="muted" style="margin-top:12px">Upload a <code>.jar</code>, a <code>.zip</code> of jars, or a Modrinth
+        <code>.mrpack</code>. Only Fabric mods for this server's version work. Mods run as code on this PC, so only
+        upload ones you trust. Mods that add blocks or items must also be installed by every player, and they stop
+        old-version clients from joining. Changes apply the next time the server starts; removed mods are kept in
+        <code>server\mods-removed</code>.</div>
+    </section>
+
     <section class="card">
       <h2>Console log</h2>
       <button id="logs-btn">Refresh log</button>
@@ -121,6 +137,11 @@ function render(s) {
   $('detail').textContent = detail;
   $('players').replaceChildren(...s.names.map(n => Object.assign(document.createElement('span'), { className: 'chip', textContent: n })));
   $('wl-card').hidden = s.whitelist === false;   // offline mode: passwords (/register) protect names instead
+  const showMods = !!s.mods_enabled;
+  if (showMods && $('mods-card').hidden) loadMods();
+  $('mods-card').hidden = !showMods;
+  modsEditable = s.state === 'asleep' && !s.maintenance;
+  applyModsEditable();
   $('start').disabled = s.state !== 'asleep';
   $('stop').disabled = !['online', 'starting'].includes(s.state);
 }
@@ -163,6 +184,71 @@ $('wl-form').addEventListener('submit', async (e) => {
   try { await api('/api/whitelist', { method: 'POST', body: JSON.stringify({ op, name: $('wl-name').value.trim() }) }); $('wl-name').value = ''; loadWhitelist(); }
   catch (err) { $('wl-note').textContent = err.message; }
 });
+let modsEditable = false;
+function applyModsEditable() {
+  $('mods-upload').disabled = !modsEditable;
+  document.querySelectorAll('.mod-remove').forEach(b => { b.disabled = !modsEditable; });
+  $('mods-note').textContent = modsEditable ? '' : 'The server is awake. Press Stop server and wait until it says asleep to change mods.';
+}
+
+async function loadMods() {
+  try {
+    const data = await api('/api/mods');
+    const rows = data.mods.map(m => {
+      const row = document.createElement('div');
+      row.className = 'row';
+      row.style.justifyContent = 'space-between';
+      const label = document.createElement('span');
+      label.textContent = `${m.name} ${m.version}`.trim();
+      const small = document.createElement('span');
+      small.className = 'muted';
+      small.textContent = `  ${m.file} · ${(m.size / 1048576).toFixed(1)} MB`;
+      label.appendChild(small);
+      const btn = document.createElement('button');
+      btn.className = 'mod-remove';
+      btn.textContent = 'Remove';
+      btn.addEventListener('click', async () => {
+        if (!confirm(`Remove ${m.name}? It moves to server\\mods-removed.`)) return;
+        try { await api('/api/mods/' + encodeURIComponent(m.file), { method: 'DELETE' }); $('mods-result').textContent = `Removed ${m.file}. Applies on next start.`; loadMods(); }
+        catch (e) { $('mods-result').textContent = e.message; }
+      });
+      row.append(label, btn);
+      return row;
+    });
+    $('mods-list').replaceChildren(...rows);
+    applyModsEditable();
+  } catch (e) { $('mods-note').textContent = e.message; }
+}
+
+$('mods-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const files = $('mods-file').files;
+  if (!files.length) return;
+  const form = new FormData();
+  for (const f of files) form.append('file', f);
+  $('mods-upload').disabled = true;
+  $('mods-result').textContent = 'Uploading and installing... (modpacks can take a minute)';
+  try {
+    const res = await fetch('/api/mods/upload', { method: 'POST', body: form, credentials: 'same-origin' });
+    const body = await res.json().catch(() => ({}));
+    if (res.status === 401) { showLogin(); return; }
+    if (!res.ok) throw new Error(body.error || res.statusText);
+    const lines = [];
+    for (const r of body.results) {
+      if (!r.ok) { lines.push(`✗ ${r.file}: ${r.error}`); continue; }
+      lines.push(`✓ ${r.file}`);
+      r.installed.forEach(x => lines.push(`    installed: ${x}`));
+      r.replaced.forEach(x => lines.push(`    replaced older: ${x}`));
+      r.skipped.forEach(x => lines.push(`    skipped: ${x}`));
+      r.warnings.forEach(x => lines.push(`    note: ${x}`));
+    }
+    $('mods-result').textContent = lines.join('\n') + '\n\nMods apply the next time the server starts.';
+    $('mods-file').value = '';
+    loadMods();
+  } catch (err) { $('mods-result').textContent = err.message; }
+  finally { applyModsEditable(); }
+});
+
 $('logs-btn').addEventListener('click', async () => {
   try { const { logs } = await api('/api/logs'); const pre = $('logs'); pre.hidden = false; pre.textContent = logs; pre.scrollTop = pre.scrollHeight; }
   catch (e) { $('action-err').textContent = e.message; }
