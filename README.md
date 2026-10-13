@@ -1,6 +1,6 @@
  # Friends SMP (Fabric, Java Edition)
 
-Self-hosted modded Minecraft server for this Windows PC.
+ Self-hosted modded Minecraft server for this Windows PC.
 
 > **Want an Aternos-style server** (sleeps when empty, wakes when a friend joins, web panel + Discord bot)?
 > See [cloud/README.md](cloud/README.md). The rest of this file is the Windows, run-it-on-a-PC setup.
