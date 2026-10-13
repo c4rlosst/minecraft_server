@@ -1,8 +1,20 @@
-# Friends SMP: Aternos-style server on one Windows PC
+# Friends SMP (Fabric, Java Edition)
 
-A modded Fabric Minecraft server that **sleeps when nobody is online and wakes when a whitelisted friend joins**.
-A small background program (the *controller*) owns the public port, starts and stops the real server, keeps the
-whitelist, takes a backup every time the server sleeps, and talks to your friends through a Discord bot.
+Self-hosted modded Minecraft server for this Windows PC.
+
+A modded Fabric Minecraft server that sleeps when nobody is online and wakes when a whitelisted friend joins. A small background program (the controller) owns the public port, starts and stops the real server, keeps the whitelist, takes a backup every time the server sleeps, and talks to your friends through a Discord bot.
+
+> **Want an Aternos-style server** (sleeps when empty, wakes when a friend joins, web panel + Discord bot)?
+> See [cloud/README.md](cloud/README.md). The rest of this file is the Windows, run-it-on-a-PC setup.
+
+## Quick start
+
+```powershell
+.\setup.ps1     # downloads Fabric + mods from mods.txt, asks you to accept the EULA
+.\start.ps1     # runs the server (auto-restarts on crash)
+```
+
+In the server console:
 
 ```
 friends -> playit.gg tunnel -> controller (port 25565) -> Minecraft (hidden, port 25566)
