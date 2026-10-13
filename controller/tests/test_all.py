@@ -16,6 +16,7 @@ from app.procctl import ProcessServer
 from app.dockerctl import _demux
 from app.gateway import Gateway
 from app.manager import Manager
+from app.offline import offline_uuid
 from app.rcon import rcon
 
 PROTOCOL = 800
@@ -42,6 +43,9 @@ class StubManager:
 
     def allowed_names(self):
         return self.allowed
+
+    def is_allowed(self, name):
+        return name.lower() in self.allowed
 
     async def start(self):
         self.starts += 1
@@ -355,6 +359,20 @@ class ManagerTests(unittest.TestCase):
         self.assertEqual(self.rcon_calls, ["whitelist add Alex"])
         self.assertEqual(pending, {"add": [], "remove": []})
 
+    def test_whitelisting_a_nonexistent_account_reports_an_error_when_online(self):
+        async def fake_rcon(host, port, password, command, timeout=5.0):
+            return "That player does not exist"
+        self.manager.rcon = fake_rcon
+
+        async def go():
+            await self.manager.start()
+            self.info = {"players": {"online": 0, "max": 10}}
+            await self.manager.refresh()
+            await self.manager.whitelist_change("add", "NotARealPerson")
+        with self.assertRaises(ValueError) as ctx:
+            run(go())
+        self.assertIn("real Minecraft account", str(ctx.exception))
+
     def test_whitelist_rejects_bad_names(self):
         with self.assertRaises(ValueError):
             run(self.manager.whitelist_change("add", "bad name; op me"))
@@ -397,6 +415,63 @@ class ManagerTests(unittest.TestCase):
         self.assertEqual(events, [("asleep", "starting"), ("starting", "online"),
                                   ("online", "stopping"), ("stopping", "asleep")])
         self.assertEqual(backups, ["exited"])
+
+
+class OfflineModeTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.server_dir = self.tmp.name
+        self.cfg = Config(state_dir=os.path.join(self.tmp.name, "state"), account_mode="offline", ops="MCboy23, bad name",
+                          rcon_password="pw", whitelist_path=os.path.join(self.tmp.name, "whitelist.json"))
+        self.docker, self.rcon_calls, self.info = FakeDocker(), [], None
+
+        async def ping(host, port, timeout):
+            if self.info is None:
+                raise ConnectionRefusedError
+            return self.info
+
+        async def fake_rcon(host, port, password, command, timeout=5.0):
+            self.rcon_calls.append(command)
+            return "ok"
+        self.manager = Manager(self.cfg, self.docker, ping=ping, rcon=fake_rcon)
+
+    def test_offline_uuid_matches_the_real_server(self):
+        # value taken from a real server's whitelist.json for this name
+        self.assertEqual(offline_uuid("hypernachoishere"), "99de81ea-322b-32b8-9436-b12e1557922a")
+
+    def test_everyone_may_join_and_whitelist_is_off(self):
+        self.assertFalse(self.manager.whitelist_on)
+        self.assertTrue(self.manager.is_allowed("AnyoneAtAll"))
+        self.assertFalse(self.manager.snapshot()["whitelist"])
+        with self.assertRaises(ValueError) as ctx:
+            run(self.manager.whitelist_change("add", "Alex"))
+        self.assertIn("offline mode", str(ctx.exception))
+
+    def test_ops_written_with_offline_uuid_before_start_and_stale_uuid_repaired(self):
+        ops_path = os.path.join(self.server_dir, "ops.json")
+        with open(ops_path, "w") as f:   # what the old online-mode /op command left behind
+            json.dump([{"uuid": "86b86a44-fec9-40e9-82fa-5c3003918588", "name": "MCboy23", "level": 4,
+                        "bypassesPlayerLimit": False}, {"uuid": "x", "name": "Other", "level": 2}], f)
+
+        async def go():
+            await self.manager.start()
+            self.info = {"players": {"online": 0, "max": 10}}
+            await self.manager.refresh()
+        run(go())
+        with open(ops_path) as f:
+            ops = {e["name"]: e for e in json.load(f)}
+        self.assertEqual(ops["MCboy23"]["uuid"], offline_uuid("MCboy23"))
+        self.assertEqual(ops["MCboy23"]["level"], 4)
+        self.assertEqual(ops["Other"]["level"], 2)               # other operators are kept
+        self.assertNotIn("bad name", ops)
+        self.assertEqual(self.rcon_calls, [])                    # no /op command: it would store the online UUID
+
+    def test_online_mode_still_uses_whitelist(self):
+        cfg = Config(state_dir=self.cfg.state_dir, whitelist_path=self.cfg.whitelist_path)
+        manager = Manager(cfg, self.docker)
+        self.assertTrue(manager.whitelist_on)
+        self.assertFalse(manager.is_allowed("Stranger"))
 
 
 class FakeJava(ProcessServer):

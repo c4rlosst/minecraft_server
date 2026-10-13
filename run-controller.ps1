@@ -26,7 +26,11 @@ foreach ($line in Get-Content $envFile) {
 
 $playit = $null
 $playitCmd = if ($env:PLAYIT_EXE) { Get-Command $env:PLAYIT_EXE -ErrorAction SilentlyContinue }
-if ($playitCmd -and -not (Get-Process -Name "playit*" -ErrorAction SilentlyContinue)) {
+# Only the real agent counts: playit.exe (terminal agent) or playitd (Windows service/daemon). The tray helper
+# (playitd-tray.exe) is not an agent, so it must not stop us from starting one.
+$agentRunning = (Get-Process -Name "playit", "playitd" -ErrorAction SilentlyContinue) -or
+    ((Get-Service -Name "playitd" -ErrorAction SilentlyContinue).Status -eq "Running")
+if ($playitCmd -and -not $agentRunning) {
     $playit = Start-Process $playitCmd.Source -PassThru -WindowStyle Hidden
     Write-Host "playit.gg agent started."
 } elseif ($playitCmd) {

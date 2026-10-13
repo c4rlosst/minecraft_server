@@ -70,7 +70,7 @@
       <div class="err" id="action-err"></div>
     </section>
 
-    <section class="card">
+    <section class="card" id="wl-card">
       <h2>Whitelist</h2>
       <div class="chips" id="whitelist"></div>
       <form class="row" id="wl-form">
@@ -120,6 +120,7 @@ function render(s) {
   if (s.error) detail += ' ' + s.error;
   $('detail').textContent = detail;
   $('players').replaceChildren(...s.names.map(n => Object.assign(document.createElement('span'), { className: 'chip', textContent: n })));
+  $('wl-card').hidden = s.whitelist === false;   // offline mode: passwords (/register) protect names instead
   $('start').disabled = s.state !== 'asleep';
   $('stop').disabled = !['online', 'starting'].includes(s.state);
 }

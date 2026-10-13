@@ -24,6 +24,7 @@ class Config:
     server_name: str = "Our SMP"
     public_address: str = ""
     ops: str = ""
+    account_mode: str = "online"       # "offline": controller writes whitelist/ops by offline UUID (see offline.py)
     panel_password: str = ""
     panel_host: str = "0.0.0.0"
     panel_port: int = 8080
@@ -61,6 +62,7 @@ class Config:
             server_name=env("SERVER_NAME", "Our SMP"),
             public_address=env("PUBLIC_ADDRESS", ""),
             ops=env("OPS", ""),
+            account_mode=env("ACCOUNT_MODE", "online").strip().lower(),
             panel_password=env("PANEL_PASSWORD", ""),
             panel_host=env("PANEL_HOST", "0.0.0.0"),
             panel_port=_int("PANEL_PORT", 8080),
