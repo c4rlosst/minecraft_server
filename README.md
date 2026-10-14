@@ -65,6 +65,24 @@ uses almost nothing.
 - Strangers can't wake the server (with the whitelist on), and the real server is only reachable through the
   controller.
 
+## Voice chat (Simple Voice Chat)
+
+`simple-voice-chat` is in [mods.txt](mods.txt). Everyone who wants voice installs **Fabric + Fabric API + Simple Voice
+Chat (same 26.3 build)** in their game (PolyMC/Prism); friends without it can still play. In game, **V** opens the
+voice menu; a crossed-out plug icon means voice isn't connected.
+
+Voice runs over **UDP port 24454**, which the free playit tunnel does not carry. To make it work for friends outside
+your home:
+1. **Router:** forward **UDP 24454** to this PC's LAN IP (reserve that IP so it doesn't change). It only works with a
+   real public IP, not a shared/CGNAT connection (check the router's WAN IP equals your public IP).
+2. **Windows Firewall** (admin PowerShell): `New-NetFirewallRule -DisplayName "Minecraft voice chat" -Direction Inbound -Protocol UDP -LocalPort 24454 -Action Allow`
+3. **Tell clients where voice lives:** in `server\config\voicechat\voicechat-server.properties` set
+   `voice_host=<your public IP or DDNS name>:24454`, then restart the Minecraft server (let it sleep, then wake it).
+   Your home IP can change when the router restarts; update `voice_host` (or use a free DDNS name).
+
+Voice only connects through your home address, so players see your public IP in their game. Without the forward, use a
+Discord voice channel instead.
+
 ## Adding mods from the panel
 
 The panel has a **Mods** card: upload a `.jar`, a `.zip` of jars, or a Modrinth `.mrpack` (from modrinth.com, via
@@ -114,7 +132,11 @@ password), `/auth remove <name>`. For a shared "door code" instead of per-player
    `DISCORD_GUILD_ID`. Right-click a channel -> **Copy Channel ID** into `DISCORD_CHANNEL_ID` to get "server is
    online / went to sleep" announcements. Set `DISCORD_ROLE_ID` to limit who can start/stop.
 4. Restart the controller. Commands: `/jarvis status`, `/jarvis start`, `/jarvis stop`, `/jarvis whitelist-add`,
-   `/jarvis whitelist-remove`.
+   `/jarvis whitelist-remove`. `/jarvis stop` refuses while anyone is playing (only the panel can force it).
+5. **Stop someone from using the commands:** a Discord server admin (anyone with Manage Server, including the
+   owner) runs `/jarvis block @person`, `/jarvis unblock @person` or `/jarvis blocked` to see the list. Or put
+   Discord user IDs in `DISCORD_BLOCKED_IDS` (comma separated) in `controller.env`. Blocked people can't use any
+   `/jarvis` command. The owner and admins can never be blocked.
 
 Keep the token private. Anyone with it controls your bot.
 

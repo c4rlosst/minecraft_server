@@ -14,6 +14,18 @@ log = logging.getLogger("manager")
 NAME_RE = re.compile(r"^[A-Za-z0-9_]{1,16}$")
 
 
+class PlayersOnline(Exception):
+    """A stop was requested while people are playing."""
+
+    def __init__(self, players: int, names: list):
+        super().__init__(f"{players} player(s) online")
+        self.players, self.names = players, names
+
+    def message(self) -> str:
+        who = f" ({', '.join(self.names)})" if self.names else ""
+        return f"{self.players} player(s) are playing right now{who}, so the server won't be stopped."
+
+
 class Manager:
     def __init__(self, cfg, runtime, ping=mcproto.ping_server, rcon=rcon_module.rcon, clock=time.monotonic):
         self.cfg, self.runtime, self.ping, self.rcon, self.clock = cfg, runtime, ping, rcon, clock
@@ -136,10 +148,13 @@ class Manager:
     def end_maintenance(self):
         self.maintenance = False
 
-    async def stop(self) -> bool:
+    async def stop(self, force: bool = False) -> bool:
+        """Stop the server on request. Refuses while players are on it unless force=True."""
         async with self._lock:
             if self.state not in ("online", "starting"):
                 return False
+            if self.players > 0 and not force:
+                raise PlayersOnline(self.players, list(self.names))
             previous = self.state
             self._begin_stop()
             self._notify(previous)

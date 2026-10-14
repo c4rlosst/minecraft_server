@@ -11,7 +11,7 @@ from pathlib import Path
 from aiohttp import web
 
 from . import modpack
-from .manager import NAME_RE
+from .manager import NAME_RE, PlayersOnline
 
 log = logging.getLogger("web")
 SESSION_TTL = 7 * 24 * 3600
@@ -78,7 +78,14 @@ def build_app(cfg, manager) -> web.Application:
         return web.json_response({"changed": await manager.start(), **manager.snapshot()})
 
     async def stop(request):
-        return web.json_response({"changed": await manager.stop(), **manager.snapshot()})
+        force = request.query.get("force") == "1"
+        try:
+            changed = await manager.stop(force=force)
+        except PlayersOnline as exc:
+            return web.json_response({"error": exc.message(), "can_force": True}, status=409)
+        if changed:
+            log.info("Server stop requested from the panel (force=%s)", force)
+        return web.json_response({"changed": changed, **manager.snapshot()})
 
     async def logs(request):
         try:

@@ -103,6 +103,8 @@ DISCORD_TOKEN=
 DISCORD_GUILD_ID=
 DISCORD_CHANNEL_ID=
 DISCORD_ROLE_ID=
+# Discord user IDs who may NOT use the commands (comma separated). Admins/the server owner are never blocked.
+DISCORD_BLOCKED_IDS=
 # playit.gg agent started alongside the controller (empty = don't manage it)
 PLAYIT_EXE=playit
 "@ | Set-Content $controllerEnv -Encoding ascii
