@@ -67,6 +67,18 @@ uses almost nothing.
 - Strangers can't wake the server (with the whitelist on), and the real server is only reachable through the
   controller.
 
+## Switch the PC off when nobody's around (optional)
+
+In `controller.env`, set `AUTO_SHUTDOWN_MINUTES=10` (and restart the controller). The PC then shuts down only when **all**
+of these are true: the Minecraft server is asleep, it's been 10 minutes since anyone was last on it (the server itself
+sleeps after `IDLE_MINUTES`, also 10, so with the same number the PC goes right after the server sleeps), and you've had no
+keyboard or mouse input for `AUTO_SHUTDOWN_USER_IDLE_MINUTES` (default 10). First a warning with **Shut down now / Cancel** appears for
+`AUTO_SHUTDOWN_WARNING_SECONDS` (default 60). Moving the mouse or a friend joining cancels it. With shared hosting it
+hands over first (uploads the world, releases the lock) and Windows waits `AUTO_SHUTDOWN_DRIVE_WAIT` seconds (default 120)
+so Google Drive can finish syncing. Programs with unsaved work can block the shutdown; `AUTO_SHUTDOWN_FORCE=1` forces it
+(you may lose unsaved work). While the PC is off, friends can't join or wake the server. To cancel a pending shutdown,
+run `shutdown /a`. Leave `AUTO_SHUTDOWN_MINUTES` empty to turn it off.
+
 ## Voice chat (Simple Voice Chat)
 
 `simple-voice-chat` is in [mods.txt](mods.txt). Everyone who wants voice installs **Fabric + Fabric API + Simple Voice

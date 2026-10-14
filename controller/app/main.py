@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import platform
+import sys
 
 from .config import Config
 from .gateway import Gateway
@@ -118,11 +119,22 @@ async def main(app: App):
     else:
         log.info("DISCORD_TOKEN not set: Discord bot disabled.")
 
-    async with server:
-        if hosting:
-            await hosting.exit_event.wait()     # a handover ends the controller
+    quit_event = asyncio.Event()                # set by an automatic shutdown of the PC
+    if cfg.auto_shutdown_minutes > 0:
+        if sys.platform != "win32":
+            log.warning("AUTO_SHUTDOWN_MINUTES is set, but automatic shutdown only works on Windows.")
         else:
-            await server.serve_forever()
+            from .autoshutdown import AutoShutdown
+            background.append(asyncio.create_task(AutoShutdown(cfg, manager, hosting, quit_event.set).run()))
+            log.info("Auto shutdown is on: PC powers off after %s min with nobody online and %s min of no keyboard/mouse "
+                     "(with a %ss warning).", cfg.auto_shutdown_minutes, cfg.auto_shutdown_user_idle_minutes,
+                     cfg.auto_shutdown_warning_seconds)
+
+    async with server:
+        waiters = [asyncio.create_task(quit_event.wait())]
+        if hosting:
+            waiters.append(asyncio.create_task(hosting.exit_event.wait()))   # a handover ends the controller
+        await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
 
 
 def cleanup(app: App):

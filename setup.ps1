@@ -114,6 +114,12 @@ SHARED_DIR=
 HOST_NAME=
 # Voice chat address for clients: auto (this PC's public IP, needs UDP 24454 forwarded here), off, or host:port
 VOICE_HOST=
+# --- Switch this PC off when nobody is on the server and you're away (empty or 0 = never) ---
+# Minutes since anyone was last on the server before the PC may shut down, e.g. 10 (the server itself sleeps after IDLE_MINUTES)
+AUTO_SHUTDOWN_MINUTES=
+# ...and minutes without keyboard/mouse use. A warning with a Cancel button appears first.
+AUTO_SHUTDOWN_USER_IDLE_MINUTES=10
+AUTO_SHUTDOWN_WARNING_SECONDS=60
 "@ | Set-Content $controllerEnv -Encoding ascii
     Write-Host "Created controller.env. Panel password (also saved in that file): $panelPassword"
 }
