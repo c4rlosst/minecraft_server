@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 
 from .config import Config
 from .gateway import Gateway
@@ -16,8 +17,18 @@ def make_runtime(cfg):
     return Docker(cfg.docker_socket)
 
 
+def setup_logging():
+    handlers = [logging.StreamHandler()]
+    log_file = os.environ.get("LOG_FILE")
+    if log_file:   # also keep a log on disk, useful when the controller runs hidden at startup
+        from logging.handlers import RotatingFileHandler
+        os.makedirs(os.path.dirname(log_file) or ".", exist_ok=True)
+        handlers.append(RotatingFileHandler(log_file, maxBytes=1_000_000, backupCount=3, encoding="utf-8"))
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s", handlers=handlers)
+
+
 async def main():
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    setup_logging()
     cfg = Config.from_env()
     if not cfg.rcon_password:
         log.warning("RCON_PASSWORD is empty; whitelist changes and graceful stops will fail.")

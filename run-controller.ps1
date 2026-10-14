@@ -17,11 +17,19 @@ $env:SERVER_DIR = Join-Path $root "server"
 $env:WHITELIST_PATH = Join-Path $root "server\whitelist.json"
 $env:STATE_DIR = Join-Path $root "state"
 $env:BACKUP_DIR = Join-Path $root "backups"
+$env:LOG_FILE = Join-Path $root "state\controller.log"   # same messages as the window, kept on disk too
 foreach ($line in Get-Content $envFile) {
     $line = $line.Trim()
     if (-not $line -or $line.StartsWith("#")) { continue }
     $key, $value = $line -split "=", 2
     Set-Item -Path "env:$($key.Trim())" -Value $value.Trim()
+}
+
+# Don't start a second copy (e.g. if the automatic-start version is already running)
+$panelPort = if ($env:PANEL_PORT) { [int]$env:PANEL_PORT } else { 8080 }
+if (Get-NetTCPConnection -LocalPort $panelPort -State Listen -ErrorAction SilentlyContinue) {
+    Write-Host "The controller is already running, nothing to do."
+    return
 }
 
 $playit = $null
