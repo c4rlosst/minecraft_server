@@ -65,6 +65,7 @@
       <div class="row">
         <button class="primary" id="start">Start server</button>
         <button id="stop">Stop server</button>
+        <button id="handover" hidden>Hand over hosting</button>
         <button id="logout" style="margin-left:auto">Log out</button>
       </div>
       <div class="err" id="action-err"></div>
@@ -135,6 +136,8 @@ function render(s) {
   else if (s.state === 'starting') detail = 'Loading the world, about a minute.';
   else if (s.state === 'stopping') detail = 'Saving the world.';
   if (s.error) detail += ' ' + s.error;
+  if (s.hosting) detail += ` · hosted by ${s.hosting.host}'s PC`;
+  $('handover').hidden = !s.hosting;
   $('detail').textContent = detail;
   $('players').replaceChildren(...s.names.map(n => Object.assign(document.createElement('span'), { className: 'chip', textContent: n })));
   $('wl-card').hidden = s.whitelist === false;   // offline mode: passwords (/register) protect names instead
@@ -186,6 +189,18 @@ for (const [id, path] of [['start', '/api/start'], ['stop', '/api/stop']]) {
     }
   });
 }
+$('handover').addEventListener('click', async () => {
+  if (!confirm('Hand over hosting? The server stops (only if nobody is playing), the world is uploaded, and this ' +
+               'controller closes so someone else can host.')) return;
+  $('action-err').textContent = 'Uploading the world... this can take a minute.';
+  try {
+    await api('/api/handover', { method: 'POST' });
+    clearInterval(timer);
+    document.body.innerHTML = '<main><h1>Handed over</h1><p>The world is uploaded and hosting is released. ' +
+      'This controller is closing, and you can close this tab.</p></main>';
+  } catch (e) { $('action-err').textContent = e.message; }
+});
+
 $('wl-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const op = e.submitter.dataset.op;

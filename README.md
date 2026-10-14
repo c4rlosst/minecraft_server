@@ -50,6 +50,8 @@ uses almost nothing.
    ```
    Undo it any time with `.\install-controller.ps1 -Remove`.
 
+> **Two people taking turns hosting the same world** (through a shared Google Drive folder)? See [HOSTING.md](HOSTING.md).
+
 ## Playing
 
 - Friends use **plain vanilla Minecraft Java, any version from 1.8 to 26.3**, and your tunnel address. No Fabric or

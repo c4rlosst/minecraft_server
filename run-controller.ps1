@@ -1,6 +1,10 @@
 # Runs the controller (wake-on-join gateway, sleep timer, web panel, Discord bot) and the playit.gg agent.
 # Leave it running. It starts the Minecraft server by itself when a whitelisted friend joins.
+#   -Takeover   shared hosting only: take over from a host whose PC crashed (no heartbeat for 5+ minutes).
+#               Whatever that host had not uploaded is lost. A host who is still alive is never overridden.
+param([switch]$Takeover)
 $ErrorActionPreference = "Stop"
+if ($Takeover) { $env:TAKEOVER = "1" }
 $root = $PSScriptRoot
 $envFile = Join-Path $root "controller.env"
 $python = Join-Path $root "controller\.venv\Scripts\python.exe"
