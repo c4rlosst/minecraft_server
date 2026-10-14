@@ -1,7 +1,7 @@
 # Aternos-style SMP (always-on Linux box + Docker)
 
 A small **controller** owns the public Minecraft port. The real Fabric server runs in its own container and is
-**asleep until a whitelisted player joins** (or someone presses Start / uses `/start` in Discord). It goes back to
+**asleep until a whitelisted player joins** (or someone presses Start / uses `/jarvis start` in Discord). It goes back to
 sleep after `IDLE_MINUTES` with nobody online. Includes a password-protected **web panel**, an optional **Discord
 bot**, and automatic **backups**.
 
@@ -74,7 +74,7 @@ Without HTTPS the panel password travels in plain text, so use HTTPS if the pane
 3. Put your Discord server's ID in `DISCORD_GUILD_ID` (commands appear instantly) and, to limit who can
    start/stop, a role ID in `DISCORD_ROLE_ID`. Then `docker compose up -d`.
 
-Commands: `/status`, `/start`, `/stop`, `/whitelist-add name`, `/whitelist-remove name`.
+Commands: `/jarvis status`, `/jarvis start`, `/jarvis stop`, `/jarvis whitelist-add name`, `/jarvis whitelist-remove name`.
 
 ## Day to day
 

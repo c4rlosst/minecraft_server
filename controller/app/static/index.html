@@ -123,6 +123,7 @@ function showLogin() {
 
 function render(s) {
   $('title').textContent = s.server_name;
+  document.title = s.server_name + ' panel';
   $('address').textContent = s.address ? 'Join with: ' + s.address : '';
   $('status-card').dataset.state = s.state;
   $('state').textContent = s.state;
