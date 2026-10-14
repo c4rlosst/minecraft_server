@@ -43,6 +43,7 @@ class Config:
     discord_guild_id: int = 0
     discord_role_id: int = 0
     discord_channel_id: int = 0
+    discord_blocked_ids: str = ""      # comma separated Discord user IDs who may not use the commands
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -81,4 +82,5 @@ class Config:
             discord_guild_id=_int("DISCORD_GUILD_ID", 0),
             discord_role_id=_int("DISCORD_ROLE_ID", 0),
             discord_channel_id=_int("DISCORD_CHANNEL_ID", 0),
+            discord_blocked_ids=env("DISCORD_BLOCKED_IDS", ""),
         )

@@ -139,6 +139,27 @@ class PanelTests(unittest.TestCase):
         self.assertIn("Stop the server", message)
         self.assertEqual(os.listdir(os.path.join(self.server_dir, "mods")), [])
 
+    def test_stop_is_refused_while_players_are_online_unless_forced(self):
+        self.runtime.status = "running"
+        self.manager.ping = lambda *a, **k: asyncio.sleep(0, {"players": {"online": 2, "max": 10,
+                                                                          "sample": [{"name": "Alex"}, {"name": "Sam"}]}})
+
+        async def scenario(client):
+            await self.login(client)
+            await self.manager.refresh()                       # server is up with 2 players
+            refused = await client.post("/api/stop")
+            body = await refused.json()
+            state_after_refusal = self.manager.state
+            forced = await client.post("/api/stop?force=1")
+            await self.manager._stop_task
+            return refused.status, body, state_after_refusal, forced.status
+        status, body, state_after, forced_status = self.run_client(scenario)
+        self.assertEqual(status, 409)
+        self.assertTrue(body["can_force"])
+        self.assertIn("Alex", body["error"])
+        self.assertEqual(state_after, "online")                # still running after the refusal
+        self.assertEqual(forced_status, 200)
+
     def test_server_cannot_start_while_mods_are_changing(self):
         async def go():
             self.assertTrue(await self.manager.begin_maintenance())

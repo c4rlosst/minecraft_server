@@ -112,7 +112,7 @@ async function api(path, options = {}) {
   const res = await fetch(path, { credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, ...options });
   const body = await res.json().catch(() => ({}));
   if (res.status === 401 && path !== '/api/login') showLogin();
-  if (!res.ok) throw new Error(body.error || res.statusText);
+  if (!res.ok) { const err = new Error(body.error || res.statusText); err.body = body; throw err; }
   return body;
 }
 
@@ -174,9 +174,16 @@ $('login-form').addEventListener('submit', async (e) => {
 $('logout').addEventListener('click', async () => { await api('/api/logout', { method: 'POST' }).catch(() => {}); showLogin(); });
 for (const [id, path] of [['start', '/api/start'], ['stop', '/api/stop']]) {
   $(id).addEventListener('click', async () => {
-    if (id === 'stop' && !confirm('Stop the server for everyone?')) return;
     $('action-err').textContent = '';
-    try { render(await api(path, { method: 'POST' })); } catch (e) { $('action-err').textContent = e.message; }
+    try { render(await api(path, { method: 'POST' })); }
+    catch (e) {
+      if (id === 'stop' && e.body && e.body.can_force) {
+        // someone is playing: only stop if the owner really means it
+        if (confirm(e.message + '\n\nStop it anyway? They will be kicked and the world will save.')) {
+          try { render(await api(path + '?force=1', { method: 'POST' })); } catch (e2) { $('action-err').textContent = e2.message; }
+        }
+      } else { $('action-err').textContent = e.message; }
+    }
   });
 }
 $('wl-form').addEventListener('submit', async (e) => {
