@@ -50,6 +50,12 @@ class Config:
     takeover: bool = False             # take over a lock left by a crashed host (loses its un-uploaded progress)
     claim_wait: int = 20               # seconds to wait after claiming the lock, to catch a simultaneous claim
     voice_host: str = ""               # "auto" (use this PC's public IP), "off", "host:port", or "" (don't touch)
+    # switch the PC off when nobody is on the server and you're away (0 = off). See autoshutdown.py
+    auto_shutdown_minutes: int = 0             # server asleep (nobody online) for this long
+    auto_shutdown_user_idle_minutes: int = 10  # ...and no keyboard/mouse for this long
+    auto_shutdown_warning_seconds: int = 60    # on-screen warning with a Cancel button
+    auto_shutdown_drive_wait: int = 120        # shared hosting: seconds Windows waits so Drive can finish syncing
+    auto_shutdown_force: bool = False          # True closes programs without asking (may lose unsaved work)
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -94,4 +100,9 @@ class Config:
             takeover=env("TAKEOVER", "") == "1",
             claim_wait=_int("CLAIM_WAIT", 20),
             voice_host=env("VOICE_HOST", "").strip(),
+            auto_shutdown_minutes=_int("AUTO_SHUTDOWN_MINUTES", 0),
+            auto_shutdown_user_idle_minutes=_int("AUTO_SHUTDOWN_USER_IDLE_MINUTES", 10),
+            auto_shutdown_warning_seconds=_int("AUTO_SHUTDOWN_WARNING_SECONDS", 60),
+            auto_shutdown_drive_wait=_int("AUTO_SHUTDOWN_DRIVE_WAIT", 120),
+            auto_shutdown_force=env("AUTO_SHUTDOWN_FORCE", "") == "1",
         )
