@@ -12,6 +12,7 @@ from aiohttp import web
 
 from . import modpack
 from .manager import NAME_RE, PlayersOnline
+from .shared import HostingError
 
 log = logging.getLogger("web")
 SESSION_TTL = 7 * 24 * 3600
@@ -21,7 +22,7 @@ NOT_AVAILABLE = "Mod uploads need the Windows (process) setup; with Docker, edit
 NOT_ASLEEP = "Stop the server first and wait until it says asleep, then change mods."
 
 
-def build_app(cfg, manager) -> web.Application:
+def build_app(cfg, manager, hosting=None) -> web.Application:
     sessions: dict[str, float] = {}
     fails: dict[str, tuple[int, float]] = {}
     page = Path(__file__).parent / "static" / "index.html"
@@ -86,6 +87,18 @@ def build_app(cfg, manager) -> web.Application:
         if changed:
             log.info("Server stop requested from the panel (force=%s)", force)
         return web.json_response({"changed": changed, **manager.snapshot()})
+
+    async def handover(request):
+        if hosting is None:
+            return web.json_response({"error": "Shared hosting isn't turned on."}, status=501)
+        try:
+            await hosting.handover()
+        except PlayersOnline as exc:
+            return web.json_response({"error": exc.message().replace("won't be stopped", "can't hand over yet")},
+                                     status=409)
+        except HostingError as exc:
+            return web.json_response({"error": str(exc)}, status=409)
+        return web.json_response({"ok": True})
 
     async def logs(request):
         try:
@@ -171,7 +184,7 @@ def build_app(cfg, manager) -> web.Application:
     app.add_routes([
         web.get("/", index), web.get("/api/public", public), web.post("/api/login", login),
         web.post("/api/logout", logout), web.get("/api/status", status), web.post("/api/start", start),
-        web.post("/api/stop", stop), web.get("/api/logs", logs),
+        web.post("/api/stop", stop), web.post("/api/handover", handover), web.get("/api/logs", logs),
         web.get("/api/whitelist", whitelist_get), web.post("/api/whitelist", whitelist_post),
         web.get("/api/mods", mods_list), web.post("/api/mods/upload", mods_upload),
         web.delete("/api/mods/{name}", mods_remove),

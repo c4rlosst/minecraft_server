@@ -44,6 +44,12 @@ class Config:
     discord_role_id: int = 0
     discord_channel_id: int = 0
     discord_blocked_ids: str = ""      # comma separated Discord user IDs who may not use the commands
+    # shared hosting (two or more people take turns hosting through a shared folder, e.g. Google Drive)
+    shared_dir: str = ""
+    host_name: str = ""
+    takeover: bool = False             # take over a lock left by a crashed host (loses its un-uploaded progress)
+    claim_wait: int = 20               # seconds to wait after claiming the lock, to catch a simultaneous claim
+    voice_host: str = ""               # "auto" (use this PC's public IP), "off", "host:port", or "" (don't touch)
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -83,4 +89,9 @@ class Config:
             discord_role_id=_int("DISCORD_ROLE_ID", 0),
             discord_channel_id=_int("DISCORD_CHANNEL_ID", 0),
             discord_blocked_ids=env("DISCORD_BLOCKED_IDS", ""),
+            shared_dir=env("SHARED_DIR", "").strip(),
+            host_name=env("HOST_NAME", "").strip(),
+            takeover=env("TAKEOVER", "") == "1",
+            claim_wait=_int("CLAIM_WAIT", 20),
+            voice_host=env("VOICE_HOST", "").strip(),
         )

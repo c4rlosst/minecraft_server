@@ -29,6 +29,8 @@ class PlayersOnline(Exception):
 class Manager:
     def __init__(self, cfg, runtime, ping=mcproto.ping_server, rcon=rcon_module.rcon, clock=time.monotonic):
         self.cfg, self.runtime, self.ping, self.rcon, self.clock = cfg, runtime, ping, rcon, clock
+        self.before_start = None  # optional blocking callable run just before the server process starts
+        self.host_info = None     # shared hosting: {"shared": True, "host": "<name>"} for the panel and Discord
         self.after_stop = None   # optional async callable, runs once the server has fully stopped (e.g. backup)
         self.on_change = None    # optional async callable(old_state, new_state), e.g. Discord announcements
         self.state = "asleep"
@@ -130,6 +132,11 @@ class Manager:
             previous = self.state
             if not self.whitelist_on:
                 self._write_offline_ops()
+            if self.before_start:
+                try:
+                    await asyncio.to_thread(self.before_start)
+                except Exception:
+                    log.exception("before-start task failed")
             await asyncio.to_thread(self.runtime.start, self.cfg.mc_container)
             self._reset()
             self.started_at = self.clock()
@@ -286,5 +293,6 @@ class Manager:
             "address": self.cfg.public_address,
             "whitelist": self.whitelist_on,
             "maintenance": self.maintenance,
+            "hosting": self.host_info,
             "mods_enabled": bool(self.cfg.server_dir),   # only the Windows/process backend manages the mods folder
         }

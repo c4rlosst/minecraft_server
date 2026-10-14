@@ -78,7 +78,7 @@ class BotTests(unittest.TestCase):
     def test_everything_lives_under_jarvis(self):
         tree, commands, _, _ = self.build()
         self.assertEqual([c.name for c in tree.get_commands()], ["jarvis"])      # no more top-level /start
-        self.assertEqual(sorted(commands), ["block", "blocked", "start", "status", "stop", "unblock",
+        self.assertEqual(sorted(commands), ["block", "blocked", "handover", "start", "status", "stop", "unblock",
                                             "whitelist-add", "whitelist-remove"])
 
     def test_start_stop_status_run_the_manager(self):

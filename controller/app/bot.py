@@ -19,7 +19,12 @@ def describe(snap: dict) -> str:
             line += f"\nSleeps in about {snap['sleeps_in'] // 60 + 1} min if nobody joins."
     if snap["address"]:
         line += f"\nAddress: `{snap['address']}`"
-    return line
+    return line + hosted_by(snap)
+
+
+def hosted_by(snap: dict) -> str:
+    hosting = snap.get("hosting")
+    return f"\nHosted by **{hosting['host']}**'s PC." if hosting else ""
 
 
 def _is_admin(member_or_perms) -> bool:
@@ -27,7 +32,7 @@ def _is_admin(member_or_perms) -> bool:
     return bool(getattr(perms, "administrator", False) or getattr(perms, "manage_guild", False))
 
 
-def register_commands(tree, cfg, manager, guild=None, blocklist=None):
+def register_commands(tree, cfg, manager, guild=None, blocklist=None, hosting=None):
     """Add the /jarvis command group to the tree and return it."""
     import discord
     from discord import app_commands
@@ -131,6 +136,23 @@ def register_commands(tree, cfg, manager, guild=None, blocklist=None):
                    "in config": f"{user.mention} is blocked in controller.env (DISCORD_BLOCKED_IDS). Remove them there."}[result]
         await interaction.response.send_message(message)
 
+    @group.command(name="handover", description="(Admins) Stop hosting from this PC so someone else can host")
+    async def handover(interaction: discord.Interaction):
+        if not await admin_only(interaction):
+            return
+        if hosting is None:
+            return await interaction.response.send_message("Shared hosting isn't turned on.", ephemeral=True)
+        await interaction.response.defer()
+        try:
+            await hosting.handover()
+        except PlayersOnline as exc:
+            return await interaction.followup.send(exc.message().replace("won't be stopped", "can't hand over yet"))
+        except Exception as exc:
+            return await interaction.followup.send(f"Couldn't hand over: {exc}")
+        log.info("%s handed over hosting from Discord", interaction.user)
+        await interaction.followup.send("The world is uploaded and hosting is released. Whoever is next can start their "
+                                        "controller now. This PC's controller is closing.")
+
     @group.command(name="blocked", description="(Admins) Who is blocked from the server commands?")
     async def blocked(interaction: discord.Interaction):
         if not await admin_only(interaction):
@@ -143,14 +165,14 @@ def register_commands(tree, cfg, manager, guild=None, blocklist=None):
     return group
 
 
-async def run_bot(cfg, manager):
+async def run_bot(cfg, manager, hosting=None):
     import discord
     from discord import app_commands
 
     client = discord.Client(intents=discord.Intents.default())
     tree = app_commands.CommandTree(client)
     guild = discord.Object(id=cfg.discord_guild_id) if cfg.discord_guild_id else None
-    register_commands(tree, cfg, manager, guild)
+    register_commands(tree, cfg, manager, guild, hosting=hosting)
 
     async def announce(old: str, new: str):
         channel = client.get_channel(cfg.discord_channel_id) if cfg.discord_channel_id else None
@@ -171,5 +193,9 @@ async def run_bot(cfg, manager):
     async def on_ready():
         await tree.sync(guild=guild)   # replaces the old /start-style commands with /jarvis
         log.info("Discord bot ready as %s", client.user)
+        channel = client.get_channel(cfg.discord_channel_id) if cfg.discord_channel_id else None
+        if hosting and channel is not None:
+            await channel.send(f"**{cfg.host_name}**'s PC is now hosting the server."
+                               + (f" Join with `{cfg.public_address}`" if cfg.public_address else ""))
 
     await client.start(cfg.discord_token)
