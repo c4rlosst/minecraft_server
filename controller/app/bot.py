@@ -1,9 +1,11 @@
-"""Optional Discord bot: /status, /start, /stop, /whitelist-add, /whitelist-remove."""
+"""Optional Discord bot. One command with subcommands:
+/jarvis start, /jarvis stop, /jarvis status, /jarvis whitelist-add, /jarvis whitelist-remove."""
 import logging
 
 from .manager import NAME_RE
 
 log = logging.getLogger("bot")
+COMMAND_NAME = "jarvis"
 
 
 def describe(snap: dict) -> str:
@@ -19,13 +21,12 @@ def describe(snap: dict) -> str:
     return line
 
 
-async def run_bot(cfg, manager):
+def register_commands(tree, cfg, manager, guild=None):
+    """Add the /jarvis command group to the tree and return it."""
     import discord
     from discord import app_commands
 
-    client = discord.Client(intents=discord.Intents.default())
-    tree = app_commands.CommandTree(client)
-    guild = discord.Object(id=cfg.discord_guild_id) if cfg.discord_guild_id else None
+    group = app_commands.Group(name=COMMAND_NAME, description="Control the Minecraft server")
 
     def allowed(interaction) -> bool:
         if not cfg.discord_role_id:
@@ -35,11 +36,11 @@ async def run_bot(cfg, manager):
     async def deny(interaction):
         await interaction.response.send_message("You don't have the role needed for that.", ephemeral=True)
 
-    @tree.command(name="status", description="Is the server running?", guild=guild)
+    @group.command(name="status", description="Is the server running?")
     async def status(interaction: discord.Interaction):
         await interaction.response.send_message(describe(manager.snapshot()))
 
-    @tree.command(name="start", description="Wake the server up", guild=guild)
+    @group.command(name="start", description="Wake the server up")
     async def start(interaction: discord.Interaction):
         if not allowed(interaction):
             return await deny(interaction)
@@ -48,7 +49,7 @@ async def run_bot(cfg, manager):
             "Starting the server, it'll be ready in about a minute." if changed
             else f"Nothing to do. {describe(manager.snapshot())}")
 
-    @tree.command(name="stop", description="Put the server to sleep", guild=guild)
+    @group.command(name="stop", description="Put the server to sleep")
     async def stop(interaction: discord.Interaction):
         if not allowed(interaction):
             return await deny(interaction)
@@ -68,13 +69,26 @@ async def run_bot(cfg, manager):
         note = "done" if result == "applied" else "queued, it applies the next time the server starts"
         await interaction.response.send_message(f"Whitelist {op} `{name}`: {note}.")
 
-    @tree.command(name="whitelist-add", description="Let a player join", guild=guild)
+    @group.command(name="whitelist-add", description="Let a player join")
     async def whitelist_add(interaction: discord.Interaction, name: str):
         await whitelist(interaction, "add", name)
 
-    @tree.command(name="whitelist-remove", description="Stop a player joining", guild=guild)
+    @group.command(name="whitelist-remove", description="Stop a player joining")
     async def whitelist_remove(interaction: discord.Interaction, name: str):
         await whitelist(interaction, "remove", name)
+
+    tree.add_command(group, guild=guild)
+    return group
+
+
+async def run_bot(cfg, manager):
+    import discord
+    from discord import app_commands
+
+    client = discord.Client(intents=discord.Intents.default())
+    tree = app_commands.CommandTree(client)
+    guild = discord.Object(id=cfg.discord_guild_id) if cfg.discord_guild_id else None
+    register_commands(tree, cfg, manager, guild)
 
     async def announce(old: str, new: str):
         channel = client.get_channel(cfg.discord_channel_id) if cfg.discord_channel_id else None
@@ -93,7 +107,7 @@ async def run_bot(cfg, manager):
 
     @client.event
     async def on_ready():
-        await tree.sync(guild=guild)
+        await tree.sync(guild=guild)   # replaces the old /start-style commands with /jarvis
         log.info("Discord bot ready as %s", client.user)
 
     await client.start(cfg.discord_token)

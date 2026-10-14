@@ -16,3 +16,6 @@ viarewind
 
 # Passwords for players on an offline-mode server (added by set-account-mode.ps1)
 easyauth
+
+# In-game voice chat. Every player who wants voice must install the same mod on their own game.
+simple-voice-chat

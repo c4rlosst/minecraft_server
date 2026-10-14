@@ -59,7 +59,7 @@ uses almost nothing.
   1.9+ combat rules, and a mod that adds new blocks/items breaks cross-version join (those mods also need every
   player to install them). Stay with server-only mods if you want everyone to join with vanilla.
 - Add friends to the whitelist with the panel (`http://127.0.0.1:8080`, password from `controller.env`) or the
-  Discord command `/whitelist-add name`. (Not needed in offline mode, see below.)
+  Discord command `/jarvis whitelist-add name`. (Not needed in offline mode, see below.)
 - A whitelisted friend joins while the server sleeps -> sees "Waking the server up!" -> reconnects about a minute
   later. After `IDLE_MINUTES` (10) with nobody online it saves, backs up the world and sleeps.
 - Strangers can't wake the server (with the whitelist on), and the real server is only reachable through the
@@ -113,7 +113,8 @@ password), `/auth remove <name>`. For a shared "door code" instead of per-player
 3. In Discord enable Developer Mode (Settings -> Advanced), right-click your server -> **Copy Server ID** into
    `DISCORD_GUILD_ID`. Right-click a channel -> **Copy Channel ID** into `DISCORD_CHANNEL_ID` to get "server is
    online / went to sleep" announcements. Set `DISCORD_ROLE_ID` to limit who can start/stop.
-4. Restart the controller. Commands: `/status`, `/start`, `/stop`, `/whitelist-add`, `/whitelist-remove`.
+4. Restart the controller. Commands: `/jarvis status`, `/jarvis start`, `/jarvis stop`, `/jarvis whitelist-add`,
+   `/jarvis whitelist-remove`.
 
 Keep the token private. Anyone with it controls your bot.
 

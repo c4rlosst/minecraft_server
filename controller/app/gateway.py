@@ -83,8 +83,9 @@ class Gateway:
             packet_id, data = await asyncio.wait_for(proto.read_packet(reader, raw, 64), 5)
             if packet_id == 0x00:
                 state = self.manager.state
+                motd = f"§l{self.cfg.server_name}§r\n{MOTD.get(state, MOTD['error'])}"   # name on line 1, state on line 2
                 writer.write(proto.status_response(
-                    hs["protocol"], state.capitalize(), MOTD.get(state, MOTD["error"]),
+                    hs["protocol"], state.capitalize(), motd,
                     self.manager.players, self.manager.max_players))
             elif packet_id == 0x01:
                 writer.write(proto.frame(0x01, data))
