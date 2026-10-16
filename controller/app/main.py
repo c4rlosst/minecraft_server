@@ -31,7 +31,7 @@ def setup_logging():
 
 class App:
     """What the shutdown code needs to know about."""
-    cfg = runtime = shared = hosting = None
+    cfg = runtime = shared = hosting = playit = None
 
 
 async def main(app: App):
@@ -47,7 +47,7 @@ async def main(app: App):
     # ---- shared hosting: take the lock and fetch the latest world before anything else -------------
     if cfg.shared_dir:
         from .hosting import Hosting
-        from .shared import HostingError, SharedWorld
+        from .shared import HostingError, SharedWorld, resumed_own_lock
         if cfg.backend != "process":
             log.error("Shared hosting needs the Windows (process) setup.")
             return
@@ -63,12 +63,19 @@ async def main(app: App):
         hosting = app.hosting = Hosting(shared, manager)
         if runtime.state(cfg.mc_container) == "running":
             hosting.mark_started()      # a server left running from earlier: upload it when it stops
+        elif resumed_own_lock(previous):
+            hosting.mark_started()      # we never uploaded the last session: this PC's world is the newest, keep it
+            log.info("Resumed this PC's own lock; keeping the local world (it is newer than the shared copy).")
         elif previous.get("version", 0) > 0:
             if cfg.backup_dir and os.path.isdir(os.path.join(cfg.server_dir, "world")):
                 from .backups import make_backup     # safety copy of this PC's world before it is replaced
                 await asyncio.to_thread(make_backup, cfg.server_dir, cfg.backup_dir, cfg.backups_keep)
             log.info("Downloading the latest world from the shared folder...")
             await asyncio.to_thread(shared.pull)
+        if cfg.playit_exe:                      # only the lock holder runs the tunnel (both PCs share one agent identity)
+            from .playit import Playit
+            app.playit = Playit(cfg.playit_exe)
+            log.info("playit.gg agent: %s", await asyncio.to_thread(app.playit.start))
         manager.host_info = {"shared": True, "host": cfg.host_name}
         background.append(asyncio.create_task(hosting.heartbeat_loop()))
         log.info("%s is now hosting.", cfg.host_name)
@@ -140,6 +147,11 @@ async def main(app: App):
 def cleanup(app: App):
     """Ctrl+C / normal exit: when hosting, stop the server, upload the world and give the lock back."""
     shared, cfg, runtime = app.shared, app.cfg, app.runtime
+    if app.playit:                               # stop the tunnel first: the next host's agent must be the only one
+        try:
+            app.playit.stop()
+        except Exception:
+            log.exception("could not stop playit")
     if not shared or not shared.token:
         return
     try:

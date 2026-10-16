@@ -3,7 +3,7 @@ import asyncio
 import logging
 
 from . import shared as shared_module
-from .manager import PlayersOnline
+from .manager import PlayersOnline, StartingUp
 
 log = logging.getLogger("hosting")
 
@@ -37,7 +37,11 @@ class Hosting:
         if m.players > 0:
             raise PlayersOnline(m.players, list(m.names))
         if m.state in ("online", "starting"):
-            await m.stop()
+            try:
+                await m.stop()
+            except StartingUp as exc:
+                raise shared_module.HostingError(exc.message().replace("protected from being stopped", "too new to hand over")
+                                                 + " Try again shortly.")
         for _ in range(180):                    # wait up to 3 minutes for the stop + upload
             if m.state == "asleep":
                 break

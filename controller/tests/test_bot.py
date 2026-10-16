@@ -113,6 +113,24 @@ class BotTests(unittest.TestCase):
         self.assertIn("playing right now", interaction.response.sent[0][0])
         self.assertIn("Alex", interaction.response.sent[0][0])
 
+    def test_stop_from_discord_is_refused_during_the_startup_protection(self):
+        from app.manager import StartingUp
+        _, commands, manager, _ = self.build()
+
+        async def refusing_stop(force=False):
+            manager.calls.append(("stop", force))
+            raise StartingUp(95)
+        manager.stop = refusing_stop
+
+        async def go():
+            interaction = FakeInteraction()
+            await commands["stop"].callback(interaction)
+            return interaction
+        interaction = asyncio.run(go())
+        self.assertEqual(manager.calls, [("stop", False)])
+        self.assertIn("only just started", interaction.response.sent[0][0])
+        self.assertIn("1 min 35 s", interaction.response.sent[0][0])
+
     def test_role_restriction_blocks_start_for_others_but_not_status(self):
         _, commands, manager, _ = self.build(discord_role_id=42)
 

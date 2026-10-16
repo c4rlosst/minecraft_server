@@ -97,6 +97,8 @@ PUBLIC_ADDRESS=
 OPS=
 MC_MEMORY=6G
 IDLE_MINUTES=10
+# After the server starts, stopping it is refused for this many minutes (so a loading server isn't killed). 0 = off
+START_GRACE_MINUTES=3
 BACKUPS_KEEP=14
 # Discord bot (leave empty to disable). See README.
 DISCORD_TOKEN=
@@ -119,6 +121,8 @@ VOICE_HOST=
 AUTO_SHUTDOWN_MINUTES=
 # ...and minutes without keyboard/mouse use. A warning with a Cancel button appears first.
 AUTO_SHUTDOWN_USER_IDLE_MINUTES=10
+# After the server starts, stopping it is refused for this many minutes (so a loading server isn't killed). 0 = off
+START_GRACE_MINUTES=3
 AUTO_SHUTDOWN_WARNING_SECONDS=60
 "@ | Set-Content $controllerEnv -Encoding ascii
     Write-Host "Created controller.env. Panel password (also saved in that file): $panelPassword"

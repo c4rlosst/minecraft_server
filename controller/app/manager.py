@@ -26,6 +26,19 @@ class PlayersOnline(Exception):
         return f"{self.players} player(s) are playing right now{who}, so the server won't be stopped."
 
 
+class StartingUp(Exception):
+    """A stop was requested right after the server started, while it may still be loading."""
+
+    def __init__(self, seconds_left: int):
+        super().__init__(f"started recently, {seconds_left}s of protection left")
+        self.seconds_left = seconds_left
+
+    def message(self) -> str:
+        minutes, seconds = divmod(self.seconds_left, 60)
+        left = f"{minutes} min {seconds} s" if minutes else f"{seconds} s"
+        return f"The server only just started and is protected from being stopped for {left} more."
+
+
 class Manager:
     def __init__(self, cfg, runtime, ping=mcproto.ping_server, rcon=rcon_module.rcon, clock=time.monotonic):
         self.cfg, self.runtime, self.ping, self.rcon, self.clock = cfg, runtime, ping, rcon, clock
@@ -111,7 +124,7 @@ class Manager:
         self.state = "stopping" if self._stopping else "online"
         if self.players > 0:
             self.last_active = now
-        elif not self._stopping and now - self.last_active >= cfg.idle_minutes * 60:
+        elif not self._stopping and now - self.last_active >= cfg.idle_minutes * 60 and self.grace_left() == 0:
             log.info("No players for %s min, putting the server to sleep", cfg.idle_minutes)
             self._begin_stop()
 
@@ -144,6 +157,13 @@ class Manager:
             self._notify(previous)
             return True
 
+    def grace_left(self) -> int:
+        """Seconds of startup protection left. 0 if off, if we didn't start this server run, or the time is up."""
+        minutes = self.cfg.start_grace_minutes
+        if minutes <= 0 or self.started_at is None:
+            return 0
+        return max(0, int(self.started_at + minutes * 60 - self.clock()))
+
     async def begin_maintenance(self) -> bool:
         """Reserve the server for a mods change. Only possible while it's asleep; blocks it from starting."""
         async with self._lock:
@@ -162,6 +182,8 @@ class Manager:
                 return False
             if self.players > 0 and not force:
                 raise PlayersOnline(self.players, list(self.names))
+            if not force and self.grace_left() > 0:
+                raise StartingUp(self.grace_left())
             previous = self.state
             self._begin_stop()
             self._notify(previous)

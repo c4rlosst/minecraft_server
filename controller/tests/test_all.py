@@ -15,7 +15,7 @@ from app.config import Config
 from app.procctl import ProcessServer
 from app.dockerctl import _demux
 from app.gateway import Gateway
-from app.manager import Manager
+from app.manager import Manager, StartingUp
 from app.offline import offline_uuid
 from app.rcon import rcon
 
@@ -342,6 +342,72 @@ class ManagerTests(unittest.TestCase):
             return m.state
         self.assertEqual(run(go()), "asleep")
 
+    # ---- startup protection (START_GRACE_MINUTES)
+    def test_a_fresh_start_cannot_be_stopped_until_the_grace_time_is_up(self):
+        async def go():
+            m = self.manager
+            await m.start()
+            self.info = {"players": {"online": 0, "max": 10}}
+            await m.refresh()                                  # online, 0 players, started 0 s ago
+            with self.assertRaises(StartingUp) as early:
+                await m.stop()
+            self.now += 100
+            with self.assertRaises(StartingUp) as later:
+                await m.stop()
+            state_after_refusals = m.state
+            self.now += 81                                     # 181 s: past 3 minutes
+            stopped = await m.stop()
+            await m._stop_task
+            return early.exception, later.exception, state_after_refusals, stopped
+        early, later, state, stopped = run(go())
+        self.assertEqual((early.seconds_left, later.seconds_left), (180, 80))
+        self.assertIn("1 min 20 s", later.message())
+        self.assertEqual(state, "online")                      # the refusals left it running
+        self.assertTrue(stopped)
+
+    def test_force_overrides_the_startup_protection(self):
+        async def go():
+            await self.manager.start()
+            return await self.manager.stop(force=True)
+        self.assertTrue(run(go()))
+
+    def test_idle_sleep_also_waits_for_the_grace_time(self):
+        self.cfg.idle_minutes = 1                              # would sleep after 1 minute...
+        self.cfg.start_grace_minutes = 3                       # ...but not before 3 minutes after the start
+
+        async def go():
+            m = self.manager
+            await m.start()
+            self.info = {"players": {"online": 0, "max": 10}}
+            await m.refresh()
+            self.now += 120
+            await m.refresh()
+            still_awake = m.state
+            self.now += 61                                     # 181 s since the start
+            await m.refresh()
+            await m._stop_task
+            return still_awake, m.state
+        self.assertEqual(run(go()), ("online", "asleep"))
+
+    def test_grace_can_be_switched_off_and_does_not_apply_to_an_adopted_server(self):
+        async def go():
+            self.cfg.start_grace_minutes = 0
+            await self.manager.start()
+            self.assertTrue(await self.manager.stop())         # off: stop works immediately
+            await self.manager._stop_task
+        run(go())
+
+        self.cfg.start_grace_minutes = 3
+        self.docker.status = "running"                         # a server that was already running when the controller started
+        self.info = {"players": {"online": 0, "max": 10}}
+        manager = Manager(self.cfg, self.docker, ping=self.manager.ping, rcon=self.manager.rcon, clock=lambda: self.now)
+
+        async def adopted():
+            await manager.refresh()
+            self.assertEqual(manager.grace_left(), 0)
+            return await manager.stop()
+        self.assertTrue(run(adopted()))
+
     def test_whitelist_queue_persists_and_applies_on_boot(self):
         async def go():
             m = self.manager
@@ -408,6 +474,7 @@ class ManagerTests(unittest.TestCase):
             await m.start()
             self.info = {"players": {"online": 0, "max": 10}}
             await m.refresh()
+            self.now += 4 * 60       # past the 3-minute startup protection
             await m.stop()
             await m._stop_task
             await asyncio.sleep(0)   # let notification tasks run

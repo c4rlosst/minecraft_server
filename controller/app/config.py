@@ -18,6 +18,7 @@ class Config:
     listen_host: str = "0.0.0.0"
     listen_port: int = 25565
     idle_minutes: int = 10
+    start_grace_minutes: int = 3       # after the server starts, a stop request is refused for this long (0 = off)
     startup_timeout: int = 900
     stop_grace: int = 120
     poll_seconds: int = 5
@@ -49,6 +50,7 @@ class Config:
     host_name: str = ""
     takeover: bool = False             # take over a lock left by a crashed host (loses its un-uploaded progress)
     claim_wait: int = 20               # seconds to wait after claiming the lock, to catch a simultaneous claim
+    playit_exe: str = ""               # shared hosting: the controller starts/stops this agent itself, after taking the lock
     voice_host: str = ""               # "auto" (use this PC's public IP), "off", "host:port", or "" (don't touch)
     # switch the PC off when nobody is on the server and you're away (0 = off). See autoshutdown.py
     auto_shutdown_minutes: int = 0             # server asleep (nobody online) for this long
@@ -70,6 +72,7 @@ class Config:
             listen_host=env("LISTEN_HOST", "0.0.0.0"),
             listen_port=_int("LISTEN_PORT", 25565),
             idle_minutes=_int("IDLE_MINUTES", 10),
+            start_grace_minutes=_int("START_GRACE_MINUTES", 3),
             startup_timeout=_int("STARTUP_TIMEOUT", 900),
             stop_grace=_int("STOP_GRACE", 120),
             poll_seconds=_int("POLL_SECONDS", 5),
@@ -99,6 +102,7 @@ class Config:
             host_name=env("HOST_NAME", "").strip(),
             takeover=env("TAKEOVER", "") == "1",
             claim_wait=_int("CLAIM_WAIT", 20),
+            playit_exe=env("PLAYIT_EXE", "").strip(),
             voice_host=env("VOICE_HOST", "").strip(),
             auto_shutdown_minutes=_int("AUTO_SHUTDOWN_MINUTES", 0),
             auto_shutdown_user_idle_minutes=_int("AUTO_SHUTDOWN_USER_IDLE_MINUTES", 10),

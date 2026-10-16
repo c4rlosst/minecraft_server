@@ -11,7 +11,7 @@ from pathlib import Path
 from aiohttp import web
 
 from . import modpack
-from .manager import NAME_RE, PlayersOnline
+from .manager import NAME_RE, PlayersOnline, StartingUp
 from .shared import HostingError
 
 log = logging.getLogger("web")
@@ -82,7 +82,7 @@ def build_app(cfg, manager, hosting=None) -> web.Application:
         force = request.query.get("force") == "1"
         try:
             changed = await manager.stop(force=force)
-        except PlayersOnline as exc:
+        except (PlayersOnline, StartingUp) as exc:
             return web.json_response({"error": exc.message(), "can_force": True}, status=409)
         if changed:
             log.info("Server stop requested from the panel (force=%s)", force)

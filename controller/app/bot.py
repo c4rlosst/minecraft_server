@@ -3,7 +3,7 @@
 import logging
 
 from .blocklist import Blocklist
-from .manager import NAME_RE, PlayersOnline
+from .manager import NAME_RE, PlayersOnline, StartingUp
 
 log = logging.getLogger("bot")
 COMMAND_NAME = "jarvis"
@@ -88,6 +88,9 @@ def register_commands(tree, cfg, manager, guild=None, blocklist=None, hosting=No
             changed = await manager.stop()   # never forced from Discord
         except PlayersOnline as exc:
             log.info("%s tried /jarvis stop while %s player(s) were online: refused", interaction.user, exc.players)
+            return await interaction.response.send_message(exc.message())
+        except StartingUp as exc:
+            log.info("%s tried /jarvis stop during the startup protection: refused", interaction.user)
             return await interaction.response.send_message(exc.message())
         if changed:
             log.info("%s stopped the server with /jarvis stop", interaction.user)
