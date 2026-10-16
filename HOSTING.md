@@ -39,11 +39,19 @@ The co-host also needs the owner's `controller.env` first (it holds the RCON and
 sent **privately**, never through GitHub or Discord channels. Copy it over, then change `SHARED_DIR` and `HOST_NAME` to the
 co-host's own values.
 
-**5. The same address (playit).** Install playit on the co-host's PC (`winget install DevelopedMethods.playit`), then copy
-`C:\ProgramData\playit_gg\playit.toml` from the owner's PC to the **same path** on the co-host's PC. That file is the
-agent's secret, so send it privately. This makes both PCs the same agent, so only **one PC may run it at a time**: the lock
-makes sure the controller only starts it for the host. Make sure the playit *service* isn't set to start by itself on the
-PC that isn't hosting (`Stop-Service playitd`).
+**5. The same address (playit).** The co-host needs only the playit agent plus **your agent's identity file**. No new
+account, no claim code, no new tunnel:
+1. Install playit on the co-host's PC: `winget install DevelopedMethods.playit`.
+2. Copy `C:\ProgramData\playit_gg\playit.toml` from the owner's PC and put it at the **same path** on the co-host's PC
+   (replace theirs). It's the agent's secret key, so send it privately. Copy **only** that file, not `installed_user.sid`
+   (that one belongs to whichever Windows user installed playit).
+3. Keep `PLAYIT_EXE=playit` in `controller.env` (the default).
+
+Both PCs now are the *same* agent, so **only one may run it at a time**. The controller takes care of that: it starts the
+agent only **after** it has taken the hosting lock, and stops it when it quits (`playit stop`), including after a handover.
+If the stop ever fails (for example a permissions error shown in the controller log), run `playit stop` yourself, or
+`Stop-Service playitd` from an administrator PowerShell. Don't set the playit service to start with Windows on either PC
+(it's "Manual" by default). Check who's running it any time with `playit status`.
 
 **6. Voice chat (optional).** Voice goes straight to the host's home internet, so it only works when that host has
 **UDP 24454 forwarded** on their router and allowed in Windows Firewall (see the README, "Voice chat"). Then set
@@ -73,7 +81,11 @@ any download replaces a PC's local world, the controller saves a zip of it in `b
 
 - **"X is already hosting"** → that person's controller is running. Ask them to hand over.
 - **"The shared folder doesn't match the last upload yet"** → Drive is still syncing. Wait and start again.
-- **A PC crashed or the window was closed with the X:** the lock stays held. After **5 minutes** without a heartbeat the other
+- **Tunnel doesn't work after a handover:** the previous host's playit may still be running. On that PC run `playit stop`.
+- **Your own PC crashed or its window was closed with the X:** just start it again. A PC **resumes its own lock** (it's
+  recognised by its `HOST_NAME`) and keeps its local world, which is newer than the last upload. This is why every host
+  needs a **different `HOST_NAME`**.
+- **Another PC crashed or the window was closed with the X:** the lock stays held (and playit may keep running there). After **5 minutes** without a heartbeat the other
   host can start with `.\run-controller.ps1 -Takeover`. They get the **last uploaded world**; anything played since the
   last time the server fell asleep on the crashed PC is lost. A host who is still alive can never be taken over.
 - **Both PCs' clocks must be right** (Windows: Settings → Time → Sync now), because the heartbeat compares times.

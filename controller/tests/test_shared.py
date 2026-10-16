@@ -116,6 +116,31 @@ class LockAndHandoverTests(Setup):
         with self.assertRaises(HostingError):                              # ...and can't overwrite the new host's world
             a.push()
 
+    def test_a_pc_can_resume_its_own_lock_after_a_closed_window_or_crash(self):
+        first = self.host("Carlos", self.a_dir)
+        first.acquire(claim_wait=0)
+        write(os.path.join(self.a_dir, "world", "level.dat"), "v1")
+        first.push()                                                         # shared copy: version 1
+        write(os.path.join(self.a_dir, "world", "level.dat"), "v2 (newer, never uploaded)")
+        # window closed with the X: lock still says hosting; the same PC starts again, a fresh one and a stale one
+        for minutes in (1, 60):
+            self.clock.sleep(minutes * 60)
+            again = self.host("Carlos", self.a_dir)
+            previous = again.acquire(claim_wait=0)                          # no -Takeover needed for its own lock
+            self.assertTrue(shared.resumed_own_lock(previous))
+            self.assertTrue(again.holds_lock())
+            self.assertEqual(again.read_state()["host"], "Carlos")
+            self.assertNotIn("resumedOwnLock", again.read_state())
+            self.assertEqual(read(os.path.join(self.a_dir, "world", "level.dat")), "v2 (newer, never uploaded)")
+
+    def test_only_the_same_host_name_may_resume_a_lock(self):
+        a = self.host("Carlos", self.a_dir)
+        a.acquire(claim_wait=0)
+        self.clock.sleep(10)
+        with self.assertRaises(HostingError):
+            self.host("Friend", self.b_dir).acquire(claim_wait=0)           # a different name is still refused
+        self.assertFalse(shared.resumed_own_lock(a.read_state()))
+
     def test_waits_for_the_cloud_to_finish_syncing(self):
         a = self.host("Carlos", self.a_dir)
         a.acquire(claim_wait=0)

@@ -67,6 +67,13 @@ uses almost nothing.
 - Strangers can't wake the server (with the whitelist on), and the real server is only reachable through the
   controller.
 
+## Startup protection
+
+After the server starts (someone joins a sleeping server, `/jarvis start`, or the panel's Start), it **can't be stopped for
+3 minutes**, so it isn't killed while it's still loading. `/jarvis stop` is refused with a message saying how long is left;
+the panel asks you to confirm and can force it. Change it with `START_GRACE_MINUTES` in `controller.env` (0 turns it off). The
+idle-sleep timer also waits for this time. A server that was already running when the controller started isn't protected.
+
 ## Switch the PC off when nobody's around (optional)
 
 In `controller.env`, set `AUTO_SHUTDOWN_MINUTES=10` (and restart the controller). The PC then shuts down only when **all**

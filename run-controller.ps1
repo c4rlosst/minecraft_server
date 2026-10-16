@@ -42,7 +42,10 @@ $playitCmd = if ($env:PLAYIT_EXE) { Get-Command $env:PLAYIT_EXE -ErrorAction Sil
 # (playitd-tray.exe) is not an agent, so it must not stop us from starting one.
 $agentRunning = (Get-Process -Name "playit", "playitd" -ErrorAction SilentlyContinue) -or
     ((Get-Service -Name "playitd" -ErrorAction SilentlyContinue).Status -eq "Running")
-if ($playitCmd -and -not $agentRunning) {
+if ($playitCmd -and $env:SHARED_DIR) {
+    # Shared hosting: the controller starts the agent itself, only after it has won the hosting lock, and stops it on exit.
+    Write-Host "playit.gg will be started by the controller once this PC is the host."
+} elseif ($playitCmd -and -not $agentRunning) {
     $playit = Start-Process $playitCmd.Source -PassThru -WindowStyle Hidden
     Write-Host "playit.gg agent started."
 } elseif ($playitCmd) {

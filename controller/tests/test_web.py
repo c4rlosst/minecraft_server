@@ -160,6 +160,20 @@ class PanelTests(unittest.TestCase):
         self.assertEqual(state_after, "online")                # still running after the refusal
         self.assertEqual(forced_status, 200)
 
+    def test_stop_right_after_a_start_is_refused_but_the_panel_can_force_it(self):
+        async def scenario(client):
+            await self.login(client)
+            await self.manager.start()                          # someone just woke the server
+            refused = await client.post("/api/stop")
+            body = await refused.json()
+            forced = await client.post("/api/stop?force=1")
+            return refused.status, body, forced.status
+        status, body, forced_status = self.run_client(scenario)
+        self.assertEqual(status, 409)
+        self.assertTrue(body["can_force"])
+        self.assertIn("only just started", body["error"])
+        self.assertEqual(forced_status, 200)
+
     def test_server_cannot_start_while_mods_are_changing(self):
         async def go():
             self.assertTrue(await self.manager.begin_maintenance())

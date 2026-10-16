@@ -84,6 +84,11 @@ def manifest(base: str) -> tuple:
 
 
 # ---- the lock and the sync ---------------------------------------------------------------------
+def resumed_own_lock(previous: dict) -> bool:
+    """True if acquire() resumed this PC's own earlier lock (then the local world must not be replaced by a download)."""
+    return bool(previous.get("resumedOwnLock"))
+
+
 class SharedWorld:
     def __init__(self, shared_dir: str, server_dir: str, host: str, clock=time.time, sleep=time.sleep):
         self.shared_dir, self.server_dir, self.host = shared_dir, server_dir, host
@@ -119,7 +124,12 @@ class SharedWorld:
         os.makedirs(self.data_dir, exist_ok=True)
         state = self.read_state() or {}
 
-        if state.get("status") == "hosting":
+        if state.get("status") == "hosting" and state.get("host") == self.host:
+            # This PC's own lock, left behind when its controller was closed or crashed: resume it. The local world
+            # is at least as new as the last upload, so the caller must not pull over it (see resumed_own_lock()).
+            log.warning("Resuming the hosting lock this PC (%s) already held.", self.host)
+            state = dict(state, resumedOwnLock=True)
+        elif state.get("status") == "hosting":
             age = self.clock() - float(state.get("lastSeen", 0))
             who = state.get("host", "someone")
             if age < STALE_SECONDS:     # a live host is never overridden, not even with takeover
@@ -147,7 +157,8 @@ class SharedWorld:
 
         token = uuid.uuid4().hex
         now = self.clock()
-        claim = dict(state, status="hosting", host=self.host, token=token, since=now, lastSeen=now)
+        claim = {k: v for k, v in state.items() if k != "resumedOwnLock"}
+        claim.update(status="hosting", host=self.host, token=token, since=now, lastSeen=now)
         claim.setdefault("version", 0)
         self._write_state(claim)
         self.sleep(claim_wait)              # if two people start at once, the loser sees the other's token
