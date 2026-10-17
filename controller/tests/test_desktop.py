@@ -382,6 +382,26 @@ class SlowHandoverTests(unittest.TestCase):
         self.assertGreaterEqual(runner.LONG_WAIT, 600)
 
 
+class ResponsivenessTests(unittest.TestCase):
+    """The window checks the controller every second or so; that check must be quick (it froze the window before)."""
+
+    def test_a_closed_port_is_answered_quickly_and_an_open_one_is_seen(self):
+        closed = Panel(free_port(), "pw")
+        started = time.time()
+        self.assertFalse(closed.listening())
+        self.assertLess(time.time() - started, 0.8)                   # it used to wait a full second
+        with socket.socket() as server:
+            server.bind(("127.0.0.1", 0))
+            server.listen(1)
+            self.assertTrue(Panel(server.getsockname()[1], "pw").listening())
+
+    def test_the_drawn_pieces_are_cached_and_still_independent_of_each_other(self):
+        from app.desktop import pixel
+        self.assertIs(pixel.button(120, 40, "normal"), pixel.button(120, 40, "normal"))     # drawn once
+        self.assertIsNot(pixel.button(120, 40, "normal"), pixel.button(120, 40, "hover"))
+        self.assertEqual(pixel.panel(100, 60).size, (100, 60))
+
+
 class HandoverRaceTests(unittest.TestCase):
     def test_a_second_hand_over_and_a_second_upload_are_not_started(self):
         from app.hosting import Hosting
