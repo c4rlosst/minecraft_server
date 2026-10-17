@@ -258,6 +258,19 @@ class MirrorTests(Setup):
         write(os.path.join(self.a_dir, "ops.json"), "123")
         self.assertEqual(shared.manifest(self.a_dir), (2, 8))
 
+    def test_google_drive_desktop_ini_files_are_ignored(self):
+        # Drive adds a desktop.ini to every folder it syncs; counting them made the next host wait for a count that
+        # could never match ("388/288 files").
+        write(os.path.join(self.a_dir, "world", "level.dat"), "12345")
+        before = shared.manifest(self.a_dir)
+        write(os.path.join(self.a_dir, "world", "desktop.ini"), "[.ShellClassInfo]")
+        write(os.path.join(self.a_dir, "world", "region", "desktop.ini"), "[.ShellClassInfo]")
+        self.assertEqual(shared.manifest(self.a_dir), before)
+        dst = os.path.join(self.root, "dst")
+        shared.mirror_dir(os.path.join(self.a_dir, "world"), dst)
+        self.assertTrue(os.path.exists(os.path.join(dst, "level.dat")))
+        self.assertFalse(os.path.exists(os.path.join(dst, "desktop.ini")))
+
 
 class HandoverTests(Setup):
     def run_async(self, coro):
