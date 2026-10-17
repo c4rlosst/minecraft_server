@@ -3,6 +3,7 @@ import logging
 import os
 import sys
 
+from . import identity
 from .config import Config
 from .gateway import Gateway
 from .manager import Manager
@@ -19,13 +20,14 @@ def make_runtime(cfg):
 
 
 def setup_logging():
-    handlers = [logging.StreamHandler()]
+    handlers = [logging.StreamHandler()] if sys.stderr is not None else []   # pythonw.exe can have no console at all
     log_file = os.environ.get("LOG_FILE")
     if log_file:   # also keep a log on disk, useful when the controller runs hidden at startup
         from logging.handlers import RotatingFileHandler
         os.makedirs(os.path.dirname(log_file) or ".", exist_ok=True)
         handlers.append(RotatingFileHandler(log_file, maxBytes=1_000_000, backupCount=3, encoding="utf-8"))
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s", handlers=handlers)
+    logging.getLogger("aiohttp.access").setLevel(logging.WARNING)   # one line per panel request is just noise
 
 
 class App:
@@ -74,9 +76,17 @@ async def main(app: App):
                 await asyncio.to_thread(make_backup, cfg.server_dir, cfg.backup_dir, cfg.backups_keep)
             log.info("Downloading the latest world from the shared folder...")
             await asyncio.to_thread(shared.pull)
+        try:                                    # the server's name / description / picture: the newest one wins
+            await asyncio.to_thread(identity.sync, shared, cfg.server_dir)
+        except Exception as exc:                # never worth blocking the host over
+            log.warning("Couldn't sync the server name and picture (%s); using this PC's.", exc)
         if cfg.playit_exe:                      # only the lock holder runs the tunnel (both PCs share one agent identity)
-            from .playit import Playit
-            app.playit = Playit(cfg.playit_exe)
+            from .playit import Playit, PlayitDaemon
+            if cfg.playit_secret_path:          # the desktop app: our own agent process, no Windows service needed
+                app.playit = PlayitDaemon(cfg.playit_exe, cfg.playit_secret_path,
+                                          os.path.join(cfg.state_dir, "playit.log"))
+            else:
+                app.playit = Playit(cfg.playit_exe)
             log.info("playit.gg agent: %s", await asyncio.to_thread(app.playit.start))
         manager.host_info = {"shared": True, "host": cfg.host_name}
         background.append(asyncio.create_task(hosting.heartbeat_loop()))
@@ -101,15 +111,19 @@ async def main(app: App):
                 log.error("The world was NOT uploaded to the shared storage: %s", exc)
     manager.after_stop = after_stop
 
-    if hosting or cfg.voice_host:
-        from . import voice
+    if identity.apply(cfg):
+        log.info("Server name: %s%s", cfg.server_name, f" - {cfg.server_description}" if cfg.server_description else "")
 
-        def before_start():
-            if hosting:
-                hosting.mark_started()
-            if cfg.voice_host and cfg.server_dir:
-                voice.apply(cfg.server_dir, cfg.voice_host)
-        manager.before_start = before_start
+    def before_start():
+        if hosting:
+            hosting.mark_started()
+        if cfg.voice_host and cfg.server_dir:
+            from . import voice
+            voice.apply(cfg.server_dir, cfg.voice_host)
+        identity.apply_to_server(cfg)               # the server list text of the real server, at every wake
+    manager.before_start = before_start
+
+    quit_event = asyncio.Event()                # set by an automatic shutdown of the PC, or the desktop app's Quit
 
     # ---- front doors ---------------------------------------------------------------------------------
     gateway = Gateway(cfg, manager)
@@ -119,7 +133,7 @@ async def main(app: App):
     if cfg.panel_password:
         from aiohttp import web
         from .web import build_app
-        runner = web.AppRunner(build_app(cfg, manager, hosting))
+        runner = web.AppRunner(build_app(cfg, manager, hosting, on_quit=quit_event.set))
         await runner.setup()
         await web.TCPSite(runner, cfg.panel_host, cfg.panel_port).start()
         log.info("Web panel on %s:%s", cfg.panel_host, cfg.panel_port)
@@ -132,7 +146,6 @@ async def main(app: App):
     else:
         log.info("DISCORD_TOKEN not set: Discord bot disabled.")
 
-    quit_event = asyncio.Event()                # set by an automatic shutdown of the PC
     if cfg.auto_shutdown_minutes > 0:
         if sys.platform != "win32":
             log.warning("AUTO_SHUTDOWN_MINUTES is set, but automatic shutdown only works on Windows.")

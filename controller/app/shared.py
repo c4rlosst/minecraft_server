@@ -15,6 +15,7 @@ import threading
 import time
 import uuid
 
+from . import identity
 from .rclone import RcloneError, join as rjoin
 
 log = logging.getLogger("shared")
@@ -176,6 +177,28 @@ class SharedWorld:
             copy_file(os.path.join(self.server_dir, f), os.path.join(self.data_dir, f))
         return manifest(self.data_dir)
 
+    # -- the server's name, description and picture, shared by every host (identity.py decides who is newest)
+    def read_identity(self):
+        try:
+            with open(os.path.join(self.shared_dir, identity.IDENTITY_FILE), "rb") as f:
+                return identity.parse(f.read())
+        except OSError:
+            return None
+
+    def read_shared_icon(self):
+        try:
+            with open(os.path.join(self.shared_dir, identity.ICON_FILE), "rb") as f:
+                return f.read()
+        except OSError:
+            return None
+
+    def write_identity(self, ident: dict, icon) -> None:
+        if icon:                                     # the picture first, so nobody sees the new name with the old picture
+            with open(os.path.join(self.shared_dir, identity.ICON_FILE), "wb") as f:
+                f.write(icon)
+        with open(os.path.join(self.shared_dir, identity.IDENTITY_FILE), "w", encoding="utf-8") as f:
+            json.dump(ident, f, ensure_ascii=False)
+
     # -- state file
     def read_state(self):
         try:
@@ -188,7 +211,14 @@ class SharedWorld:
         tmp = self.state_path + ".tmp"
         with open(tmp, "w") as f:
             json.dump(state, f)
-        os.replace(tmp, self.state_path)
+        for attempt in range(6):
+            try:
+                os.replace(tmp, self.state_path)
+                return
+            except PermissionError:             # Windows: someone (another thread, an antivirus scan) has it open for an instant
+                if attempt == 5:
+                    raise
+                time.sleep(0.05 * (attempt + 1))
 
     def holds_lock(self) -> bool:
         state = self.read_state()
@@ -355,6 +385,28 @@ class RcloneWorld(SharedWorld):
     def _write_state(self, state: dict) -> None:
         try:
             self.rclone.put(self._p("state.json"), json.dumps(state).encode("utf-8"))
+        except RcloneError as exc:
+            raise self._unreachable("Can't write to the shared storage", exc) from None
+
+    # -- the server's name, description and picture
+    def read_identity(self):
+        try:
+            raw = self.rclone.cat(self._p(identity.IDENTITY_FILE))
+        except RcloneError as exc:
+            raise self._unreachable("Can't reach the shared storage", exc) from None
+        return identity.parse(raw) if raw else None
+
+    def read_shared_icon(self):
+        try:
+            return self.rclone.cat(self._p(identity.ICON_FILE))
+        except RcloneError as exc:
+            raise self._unreachable("Can't reach the shared storage", exc) from None
+
+    def write_identity(self, ident: dict, icon) -> None:
+        try:
+            if icon:                                 # the picture first, so nobody sees the new name with the old picture
+                self.rclone.put(self._p(identity.ICON_FILE), icon)
+            self.rclone.put(self._p(identity.IDENTITY_FILE), json.dumps(ident, ensure_ascii=False).encode("utf-8"))
         except RcloneError as exc:
             raise self._unreachable("Can't write to the shared storage", exc) from None
 

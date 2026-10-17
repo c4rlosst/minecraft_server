@@ -92,12 +92,15 @@ def parse_login_name(data: bytes) -> str:
     return name
 
 
-def status_response(protocol: int, version_name: str, motd: str, online: int = 0, maximum: int = 0) -> bytes:
+def status_response(protocol: int, version_name: str, motd: str, online: int = 0, maximum: int = 0,
+                    favicon: str = None) -> bytes:
     body = {
         "version": {"name": version_name, "protocol": protocol},
         "players": {"max": maximum, "online": online},
         "description": {"text": motd},
     }
+    if favicon:                                    # "data:image/png;base64,..." (64x64), shown next to the name
+        body["favicon"] = favicon
     return frame(0x00, encode_string(json.dumps(body, ensure_ascii=False, separators=(",", ":"))))
 
 

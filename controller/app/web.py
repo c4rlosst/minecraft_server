@@ -10,7 +10,7 @@ from pathlib import Path
 
 from aiohttp import web
 
-from . import modpack
+from . import identity, modpack
 from .manager import NAME_RE, PlayersOnline, StartingUp
 from .shared import HostingError
 
@@ -22,7 +22,7 @@ NOT_AVAILABLE = "Mod uploads need the Windows (process) setup; with Docker, edit
 NOT_ASLEEP = "Stop the server first and wait until it says asleep, then change mods."
 
 
-def build_app(cfg, manager, hosting=None) -> web.Application:
+def build_app(cfg, manager, hosting=None, on_quit=None) -> web.Application:
     sessions: dict[str, float] = {}
     fails: dict[str, tuple[int, float]] = {}
     page = Path(__file__).parent / "static" / "index.html"
@@ -98,6 +98,22 @@ def build_app(cfg, manager, hosting=None) -> web.Application:
                                      status=409)
         except HostingError as exc:
             return web.json_response({"error": str(exc)}, status=409)
+        return web.json_response({"ok": True})
+
+    async def reload_identity(request):
+        """The desktop app changed the server's name/description/picture: use them from now on (the real server's own
+        server list text follows at its next wake)."""
+        ident = await asyncio.to_thread(identity.apply, cfg)
+        return web.json_response({"ok": True, "name": cfg.server_name, "description": cfg.server_description,
+                                  "custom": bool(ident)})
+
+    async def quit_controller(request):
+        """The desktop app's 'stop now': the controller exits, and on the way out stops the server (kicking anyone
+        online), backs up, uploads and releases the lock, like Ctrl+C."""
+        if on_quit is None:
+            return web.json_response({"error": "Not available here."}, status=501)
+        log.info("Quit requested from the desktop app")
+        asyncio.get_running_loop().call_later(0.5, on_quit)       # let this reply go out first
         return web.json_response({"ok": True})
 
     async def logs(request):
@@ -184,7 +200,9 @@ def build_app(cfg, manager, hosting=None) -> web.Application:
     app.add_routes([
         web.get("/", index), web.get("/api/public", public), web.post("/api/login", login),
         web.post("/api/logout", logout), web.get("/api/status", status), web.post("/api/start", start),
-        web.post("/api/stop", stop), web.post("/api/handover", handover), web.get("/api/logs", logs),
+        web.post("/api/stop", stop), web.post("/api/handover", handover), web.post("/api/quit", quit_controller),
+        web.post("/api/reload-identity", reload_identity),
+        web.get("/api/logs", logs),
         web.get("/api/whitelist", whitelist_get), web.post("/api/whitelist", whitelist_post),
         web.get("/api/mods", mods_list), web.post("/api/mods/upload", mods_upload),
         web.delete("/api/mods/{name}", mods_remove),
