@@ -4,6 +4,8 @@ import json
 import os
 import tempfile
 import unittest
+import unittest.mock
+from unittest import mock
 
 from app import shared, voice
 from app.hosting import Hosting
@@ -236,6 +238,121 @@ class LockAndHandoverTests(Setup):
         a.release()
         state = a.read_state()
         self.assertEqual((state["status"], state["host"], state["lastHost"]), ("idle", None, "Carlos"))
+
+
+class CutOffDownloadTests(Setup):
+    """A download that was interrupted (window closed, crash) must not be 'resumed' as if it were the newest world."""
+    def upload_world(self):
+        a = self.host("Carlos", self.a_dir)
+        a.acquire(claim_wait=0)
+        write(os.path.join(self.a_dir, "world", "level.dat"), "real world")
+        write(os.path.join(self.a_dir, "mods", "waystones.jar"), "jar")
+        write(os.path.join(self.a_dir, "EasyAuth", "easyauth.db"), "everyone's passwords")
+        write(os.path.join(self.a_dir, "server.properties"), "motd=JAPAX x RENE")
+        a.push()
+        a.release()
+
+    def test_a_finished_download_can_be_kept_after_resuming(self):
+        self.upload_world()
+        b = self.host("Friend", self.b_dir)
+        b.acquire(claim_wait=0)
+        b.pull()
+        self.assertFalse(os.path.exists(os.path.join(self.b_dir, shared.PULL_MARKER)))
+        self.assertTrue(b.can_keep_local_world())
+        self.assertFalse(os.path.exists(os.path.join(self.cloud, "data", shared.PULL_MARKER)))   # the marker never travels
+
+    def test_a_cut_off_download_is_fetched_again_even_when_the_lock_is_resumed(self):
+        self.upload_world()
+        b = self.host("Friend", self.b_dir)
+        b.acquire(claim_wait=0)
+        real = shared.mirror_dir
+
+        def cut_off(src, dst):          # the world copies, then the window is closed before the mods
+            if os.path.basename(dst) == "mods":
+                raise OSError("window closed")
+            real(src, dst)
+        with mock.patch.object(shared, "mirror_dir", cut_off):
+            with self.assertRaises(OSError):
+                b.pull()
+        self.assertTrue(os.path.isdir(os.path.join(self.b_dir, "world")))      # a world is there, but only part of it
+        self.assertFalse(b.can_keep_local_world())
+
+        again = self.host("Friend", self.b_dir)                                # the same PC starts again
+        previous = again.acquire(claim_wait=0)
+        self.assertTrue(shared.resumed_own_lock(previous))
+        self.assertFalse(again.can_keep_local_world())                         # so the caller downloads again
+        again.pull()
+        self.assertTrue(again.can_keep_local_world())
+        self.assertEqual(read(os.path.join(self.b_dir, "EasyAuth", "easyauth.db")), "everyone's passwords")
+        self.assertEqual(read(os.path.join(self.b_dir, "server.properties")), "motd=JAPAX x RENE")
+
+    def test_a_pc_without_a_world_never_keeps_it(self):
+        self.assertFalse(self.host("Friend", self.b_dir).can_keep_local_world())
+
+
+class SharedToolTests(Setup):
+    """shared-world.ps1 status / upload, and how the controller picks the shared storage."""
+    def cfg(self, **kwargs):
+        from app.config import Config
+        return Config(server_dir=self.a_dir, host_name="Carlos", claim_wait=0, **kwargs)
+
+    def test_the_configured_storage_is_picked_remote_first_then_folder_then_none(self):
+        world, where = shared.build_world(self.cfg())
+        self.assertIsNone(world)
+        world, where = shared.build_world(self.cfg(shared_dir=self.cloud))
+        self.assertEqual((type(world), where), (SharedWorld, self.cloud))
+        world, where = shared.build_world(self.cfg(shared_dir=self.cloud, shared_remote="jx:japax", shared_skip_checks=True))
+        self.assertEqual((type(world).__name__, where, world.skip_checks), ("RcloneWorld", "jx:japax", True))
+
+    def test_upload_seeds_a_brand_new_shared_world_and_leaves_it_free(self):
+        from app import sharedtool
+        write(os.path.join(self.a_dir, "world", "level.dat"), "my world")
+        write(os.path.join(self.a_dir, "EasyAuth", "easyauth.db"), "passwords")
+        world = self.host("Carlos", self.a_dir)
+        self.assertIn("brand new", sharedtool.describe(world))
+        message = sharedtool.upload(world, claim_wait=0)
+        self.assertIn("Uploaded: 2 files", message)
+        state = world.read_state()
+        self.assertEqual((state["status"], state["version"], state["lastHost"]), ("idle", 1, "Carlos"))
+        text = sharedtool.describe(world, now=self.clock.now)
+        self.assertIn("nobody (last host: Carlos)", text)
+        self.assertIn("2 files", text)
+        self.assertIn("matches the record", text)
+        self.assertEqual(read(os.path.join(world.data_dir, "world", "level.dat")), "my world")
+
+    def test_upload_refuses_while_a_controller_is_running(self):
+        from app import sharedtool
+        running = self.host("Carlos", self.a_dir)
+        running.acquire(claim_wait=0)                       # a live controller holds the lock (heartbeat just now)
+        write(os.path.join(self.a_dir, "world", "level.dat"), "x")
+        tool_world = SharedWorld(self.cloud, self.a_dir, "Carlos")       # same PC name, as the real tool would be
+        with unittest.mock.patch("time.time", self.clock.time):
+            with self.assertRaises(HostingError) as ctx:
+                sharedtool.upload(tool_world, claim_wait=0)
+        self.assertIn("Close that controller", str(ctx.exception))
+        self.assertTrue(running.holds_lock())               # and the live controller's lock was not touched
+
+    def test_status_says_when_the_storage_differs_from_the_record_or_the_host_is_gone(self):
+        from app import sharedtool
+        write(os.path.join(self.a_dir, "world", "level.dat"), "my world")
+        a = self.host("Carlos", self.a_dir)
+        a.acquire(claim_wait=0)
+        a.push()
+        os.remove(os.path.join(a.data_dir, "world", "level.dat"))                       # storage lost a file
+        self.clock.sleep(shared.STALE_SECONDS + 60)
+        text = sharedtool.describe(a, now=self.clock.now)
+        self.assertIn("Carlos (NOT responding", text)
+        self.assertIn("DIFFERENT from the record", text)
+
+    def test_main_prints_a_clear_message_when_shared_hosting_is_off(self):
+        import contextlib
+        import io
+        from app import sharedtool
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = sharedtool.main(["tool", "status"], cfg=self.cfg())
+        self.assertEqual(code, 2)
+        self.assertIn("SHARED_REMOTE", out.getvalue())
 
 
 class MirrorTests(Setup):

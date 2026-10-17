@@ -12,6 +12,61 @@ shared Drive folder:   state.json  (who is hosting)      data/  (world, mods, co
 Only share this with someone you trust completely: a host has full access to the world, the players' passwords and the
 bot token.
 
+## Recommended: rclone with Backblaze B2 (no Google Drive at all)
+
+A synced Drive folder is slow and unreliable for this: the desktop app syncs in the background, so one PC can see the
+other's changes (the lock too) late, and it litters folders with `desktop.ini`. With **rclone** the controller talks to
+cloud storage directly, so:
+- the lock is seen by the other PC **at once**, and nobody has to wait for "Up to date";
+- only the files that changed are uploaded or downloaded, in parallel;
+- every upload keeps what it replaced for 7 days in `history/`, so a bad upload can be undone;
+- an upload is refused if this PC's world looks wrong (fewer player files than the shared one, no `level.dat`, or half
+  the files missing), so a half-finished download or a brand new default world can't replace the real one.
+
+[Backblaze B2](https://www.backblaze.com/sign-up/b2-cloud-storage-backup-archive) gives 10 GB free and says no credit card
+is needed (check the sign-up page). The world is about 0.4 GB.
+
+**Once (the owner):**
+1. Create a B2 account, then **Buckets -> Create a Bucket**: a unique name such as `japax-world-4821`, **Private**,
+   encryption and object lock off, and (if offered) the lifecycle setting **"Keep only the last version of the file"**.
+2. **Application Keys -> Add a New Application Key**: one key per person (e.g. `owner-pc`, later `friend-pc`), access to
+   **that one bucket only**, **Read and Write**. Copy the keyID and applicationKey right away (shown once). A key can be
+   revoked any time without affecting the others, and it can't touch anything but that bucket.
+
+**On each PC** (the owner's and the co-host's), in PowerShell:
+```powershell
+winget install Rclone.Rclone
+```
+Open a **new** PowerShell, then create the remote with that person's own key (it stays on that PC, in
+`%APPDATA%\rclone\rclone.conf`; never post it anywhere):
+```powershell
+rclone config create jx b2 account=YOUR_KEY_ID key=YOUR_APPLICATION_KEY
+rclone lsd jx:
+```
+The second line should list the bucket. Then in `controller.env` (leave `SHARED_DIR` empty; `HOST_NAME` stays unique per PC):
+```
+SHARED_REMOTE=jx:japax-world-4821
+```
+**The very first time,** put the owner's world into the bucket (close the controller first):
+```powershell
+.\shared-world.ps1 upload
+.\shared-world.ps1 status       # who is hosting, which upload is stored, and whether it matches the record
+```
+After that the controller works exactly like before: taking turns, hand over, the playit tunnel. No Google Drive app is
+needed on any PC.
+
+**Other storage:** Google Drive through rclone (`rclone config create jx drive scope=drive root_folder_id=<FOLDER_ID>`, sign
+in once in the browser, `SHARED_REMOTE=jx:`), Cloudflare R2 (its docs describe a checkout step, so it may want a card), and
+anything else rclone supports: run `rclone config`, then point `SHARED_REMOTE` at `remote-name:bucket-or-folder`. Settings (all
+optional): `SHARED_HISTORY_DAYS=7` (0 turns the history off), `RCLONE_EXE`, and `SHARED_SKIP_CHECKS=1` to upload even when the
+safety check refuses (only if you really did remove players or files).
+
+Undo a bad upload: stop the controller, find the upload in `rclone lsf jx:history/` (the folder name is its time, UTC),
+copy it back with `rclone copy jx:history/<time> jx:data`, and start once with `.\run-controller.ps1 -Takeover` (the
+record of the last upload no longer matches, and the next upload fixes it).
+
+The rest of this page describes the older way, a Drive-synced folder; the steps for taking turns are the same in both.
+
 ## One-time setup
 
 **1. Shared folder (the owner).** Install [Google Drive for desktop](https://www.google.com/drive/download/). Create a

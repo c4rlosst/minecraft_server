@@ -112,6 +112,8 @@ PLAYIT_EXE=playit
 # --- Shared hosting (optional): take turns hosting with a friend through a shared Google Drive folder ---
 # Folder on THIS PC that syncs with the shared one, e.g. G:\My Drive\JAPAX-world  (empty = host alone)
 SHARED_DIR=
+# Or (recommended, no Google Drive app needed): an rclone remote, e.g. jx:  See HOSTING.md. Use one of SHARED_DIR / SHARED_REMOTE
+SHARED_REMOTE=
 # Your name, shown to the others while you host
 HOST_NAME=
 # Voice chat address for clients: auto (this PC's public IP, needs UDP 24454 forwarded here), off, or host:port

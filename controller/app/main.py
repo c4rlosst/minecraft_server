@@ -1,7 +1,6 @@
 import asyncio
 import logging
 import os
-import platform
 import sys
 
 from .config import Config
@@ -45,15 +44,15 @@ async def main(app: App):
     hosting = None
 
     # ---- shared hosting: take the lock and fetch the latest world before anything else -------------
-    if cfg.shared_dir:
+    if cfg.shared_dir or cfg.shared_remote:
         from .hosting import Hosting
-        from .shared import HostingError, SharedWorld, resumed_own_lock
+        from .shared import HostingError, build_world, resumed_own_lock
         if cfg.backend != "process":
             log.error("Shared hosting needs the Windows (process) setup.")
             return
-        cfg.host_name = cfg.host_name or platform.node()
-        shared = app.shared = SharedWorld(cfg.shared_dir, cfg.server_dir, cfg.host_name)
-        log.info("Taking the hosting lock in %s ...", cfg.shared_dir)
+        shared, where = build_world(cfg)
+        app.shared = shared
+        log.info("Taking the hosting lock in %s ...", where)
         try:
             previous = await asyncio.to_thread(shared.acquire, cfg.takeover, cfg.claim_wait)
         except HostingError as exc:
@@ -63,10 +62,13 @@ async def main(app: App):
         hosting = app.hosting = Hosting(shared, manager)
         if runtime.state(cfg.mc_container) == "running":
             hosting.mark_started()      # a server left running from earlier: upload it when it stops
-        elif resumed_own_lock(previous):
+        elif resumed_own_lock(previous) and shared.can_keep_local_world():
             hosting.mark_started()      # we never uploaded the last session: this PC's world is the newest, keep it
             log.info("Resumed this PC's own lock; keeping the local world (it is newer than the shared copy).")
         elif previous.get("version", 0) > 0:
+            if resumed_own_lock(previous):
+                log.warning("The last download from the shared folder never finished, so this PC's world is incomplete. "
+                            "Downloading it again.")
             if cfg.backup_dir and os.path.isdir(os.path.join(cfg.server_dir, "world")):
                 from .backups import make_backup     # safety copy of this PC's world before it is replaced
                 await asyncio.to_thread(make_backup, cfg.server_dir, cfg.backup_dir, cfg.backups_keep)
@@ -92,7 +94,11 @@ async def main(app: App):
         if backup:
             await backup()
         if hosting:
-            await hosting.push_after_stop()
+            try:
+                await hosting.push_after_stop()
+            except HostingError as exc:
+                # not fatal: the world is safe on this PC, and the next upload / handover tries again and shows this
+                log.error("The world was NOT uploaded to the shared storage: %s", exc)
     manager.after_stop = after_stop
 
     if hosting or cfg.voice_host:

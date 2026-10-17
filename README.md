@@ -50,7 +50,8 @@ uses almost nothing.
    ```
    Undo it any time with `.\install-controller.ps1 -Remove`.
 
-> **Two people taking turns hosting the same world** (through a shared Google Drive folder)? See [HOSTING.md](HOSTING.md).
+> **Two people taking turns hosting the same world** (through cloud storage with rclone, e.g. free Backblaze B2, or
+> through a shared Google Drive folder)? See [HOSTING.md](HOSTING.md).
 
 ## Playing
 
@@ -168,6 +169,7 @@ Keep the token private. Anyone with it controls your bot.
 | `setup.ps1` | Downloads Fabric + mods, writes `server.properties` (private port, RCON), creates `controller.env` |
 | `install-controller.ps1` | Python environment; `-Startup` starts it at login |
 | `run-controller.ps1` | Runs the controller and the playit.gg agent |
+| `shared-world.ps1` | Shared hosting: `status` shows who is hosting and what is stored, `upload` seeds the shared world from this PC |
 | `mods.txt` | Modrinth mod slugs. Re-run `setup.ps1` after editing. Content mods must be installed by every player |
 | `controller/` | The controller (Python) and its tests |
 | `start.ps1`, `backup.ps1` | Manual start / manual backup, only for troubleshooting |

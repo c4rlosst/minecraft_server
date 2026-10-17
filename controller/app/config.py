@@ -47,6 +47,10 @@ class Config:
     discord_blocked_ids: str = ""      # comma separated Discord user IDs who may not use the commands
     # shared hosting (two or more people take turns hosting through a shared folder, e.g. Google Drive)
     shared_dir: str = ""
+    shared_remote: str = ""            # shared hosting through rclone instead of a synced folder, e.g. jx:  or  jx:japax-world
+    rclone_exe: str = "rclone"
+    shared_history_days: int = 7       # keep what each upload replaced for this many days (0 = off); rclone mode only
+    shared_skip_checks: bool = False   # upload even when this PC's world looks incomplete or wrong
     host_name: str = ""
     takeover: bool = False             # take over a lock left by a crashed host (loses its un-uploaded progress)
     claim_wait: int = 20               # seconds to wait after claiming the lock, to catch a simultaneous claim
@@ -99,6 +103,10 @@ class Config:
             discord_channel_id=_int("DISCORD_CHANNEL_ID", 0),
             discord_blocked_ids=env("DISCORD_BLOCKED_IDS", ""),
             shared_dir=env("SHARED_DIR", "").strip(),
+            shared_remote=env("SHARED_REMOTE", "").strip(),
+            rclone_exe=env("RCLONE_EXE", "rclone").strip() or "rclone",
+            shared_history_days=_int("SHARED_HISTORY_DAYS", 7),
+            shared_skip_checks=env("SHARED_SKIP_CHECKS", "") == "1",
             host_name=env("HOST_NAME", "").strip(),
             takeover=env("TAKEOVER", "") == "1",
             claim_wait=_int("CLAIM_WAIT", 20),
