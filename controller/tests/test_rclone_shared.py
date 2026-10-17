@@ -59,6 +59,15 @@ class WrapperTests(unittest.TestCase):
             self.assertIsNone(rc.cat("jx:state.json"))
             self.assertEqual(rc.lsjson("jx:data"), [])
 
+    def test_storage_that_answers_a_missing_file_with_success_and_nothing_counts_as_missing(self):
+        # Backblaze B2: `rclone cat` of a file that doesn't exist exits 0 with empty output, and lsjson of a missing
+        # folder exits 0 with []. That is a brand new shared world, not a damaged lock file.
+        rc = Rclone("rclone", run=FakeRun(code=0, out=b""), which=lambda exe: "rclone")
+        self.assertIsNone(rc.cat("smp:bucket/state.json"))
+        world = RcloneWorld("smp:bucket", tempfile.gettempdir(), "Carlos", rc)
+        self.assertIsNone(world.read_state())
+        self.assertIsNone(world.read_identity())
+
     def test_real_failures_are_errors_with_rclones_message(self):
         rc = Rclone("rclone", run=FakeRun(code=1, err=b"2026 NOTICE: x\n2026 ERROR : couldn't connect to the internet\n"),
                     which=lambda exe: "rclone")

@@ -51,9 +51,10 @@ class Rclone:
 
     # -- small files (the lock) -----------------------------------------------------------------------
     def cat(self, remote_path: str) -> bytes | None:
-        """The file's contents, or None if it doesn't exist."""
+        """The file's contents, or None if it doesn't exist. Some storage (Backblaze B2) answers a missing file with
+        'success, nothing': none of the files we read are ever empty, so an empty answer also means 'not there'."""
         done = self._call("cat", remote_path, timeout=120, ok=(0, *NOT_FOUND))
-        return done.stdout if done.returncode == 0 else None
+        return done.stdout if done.returncode == 0 and done.stdout else None
 
     def put(self, remote_path: str, data: bytes) -> None:
         self._call("rcat", remote_path, data=data, timeout=120)
