@@ -344,6 +344,8 @@ class App:
         img.alpha_composite(pixel.panel(W - 40, H - log_y - 14), (20, log_y))
         s.image(img, 0, 0)
 
+        Button(s, W - 20 - 130, 22, 130, 28, "Hide to tray", self.hide_to_tray, size=10)
+
         y = top + 6                                      # under the title: description, then the address to share
         if face["description"]:
             s.text(W // 2, y, face["description"], 11, "#ffffff", "#2a2a2a", anchor="n", width=540)
@@ -593,9 +595,12 @@ class App:
 
     def stop_hosting(self, then=None):
         if not self.listening:
-            if self.controller.running() and messagebox.askyesno(
-                    APP_NAME, "It's still getting ready (downloading the world). Cancel? Nothing is lost; the "
-                              "download starts over next time."):
+            if not self.controller.running():
+                if then:                                  # nothing is running, so there is nothing to stop
+                    then()
+                return
+            if messagebox.askyesno(APP_NAME, "It's still getting ready (downloading the world). Cancel? Nothing is "
+                                             "lost; the download starts over next time."):
                 self.expect_exit = True
                 if not self.job.terminate():
                     self.controller.kill()
@@ -814,7 +819,15 @@ class App:
                                                  lambda: self.later(lambda: self.stop_hosting(then=self.quit))))
             self.tray = pystray.Icon("smp-host", pixel.grass_block(64), APP_NAME, menu)
             self.tray.run_detached()
+            self.root.after(800, self._tray_hint)
         self.root.withdraw()
+
+    def _tray_hint(self):
+        try:
+            self.tray.notify("Still running. Click this icon (next to the clock) to open it again, "
+                             "or right-click it to quit.", APP_NAME)
+        except Exception:
+            pass                                          # a notification is only a courtesy
 
     def show_window(self):
         self.root.deiconify()
