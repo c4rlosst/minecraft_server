@@ -22,9 +22,11 @@ class Panel:
         self.host, self.port = host, port
         self.opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
 
-    def listening(self) -> bool:
+    def listening(self, timeout: float = 0.3) -> bool:
+        """True when something accepts connections on the panel port. A listening port answers in under a millisecond;
+        a closed one is slow to refuse on Windows, so don't wait long for it."""
         try:
-            with socket.create_connection((self.host, self.port), timeout=1):
+            with socket.create_connection((self.host, self.port), timeout=timeout):
                 return True
         except OSError:
             return False

@@ -1,6 +1,7 @@
 """Minecraft-style pixel art for the SMP Host window, drawn with Pillow (no game assets): inventory panels, slots, stone
 buttons, a crafting-table wood panel, the chunky orange title, a blurred blocky landscape, player-head avatars and a grass
 block icon. The text font is Monocraft (SIL Open Font License, see assets/Monocraft-OFL.txt)."""
+import functools
 import hashlib
 import os
 import random
@@ -75,6 +76,12 @@ def _bevel(d, w, h, u, fill, light, dark, depth=2):
     _rect(d, w - (1 + depth) * u, (2 + depth) * u, depth * u, h - (3 + depth) * u, dark)   # right
 
 
+# Every piece below is drawn in Python pixel by pixel, which is slow; the window asks for the same ones again and again (a
+# rename rebuilds it), so each is drawn once. Callers only ever read the returned images, never change them.
+cached = functools.lru_cache(maxsize=128)
+
+
+@cached
 def panel(w, h, u=2, fill=PANEL, light=PANEL_LIGHT, dark=PANEL_DARK):
     """A grey inventory panel."""
     img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
@@ -84,6 +91,7 @@ def panel(w, h, u=2, fill=PANEL, light=PANEL_LIGHT, dark=PANEL_DARK):
     return img
 
 
+@cached
 def wood_panel(w, h, u=2, seed=3):
     """A crafting-table style panel: oak planks with a light/dark bevel."""
     img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
@@ -112,6 +120,7 @@ def wood_panel(w, h, u=2, seed=3):
     return out
 
 
+@cached
 def plaque(w, h, u=2):
     """The darker wooden name plate on top of a panel ('CRAFTING TABLE')."""
     img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
@@ -121,6 +130,7 @@ def plaque(w, h, u=2):
     return img
 
 
+@cached
 def slot(s, u=2, fill=(139, 139, 139, 255)):
     img = Image.new("RGBA", (s, s), fill)
     d = ImageDraw.Draw(img)
@@ -131,6 +141,7 @@ def slot(s, u=2, fill=(139, 139, 139, 255)):
     return img
 
 
+@cached
 def text_field(w, h, u=2):
     """A black text box with a grey border, like Minecraft's."""
     img = Image.new("RGBA", (w, h), (0, 0, 0, 255))
@@ -149,6 +160,7 @@ BUTTON_COLORS = {          # fill, top light, bottom dark, outline
 }
 
 
+@cached
 def button(w, h, state="normal", u=2):
     fill, light, dark, outline = BUTTON_COLORS[state]
     img = Image.new("RGBA", (w, h), fill)
@@ -195,6 +207,7 @@ def title(text, k=3, size=18, top=(255, 221, 87), bottom=(228, 98, 18), edge=(58
     return out
 
 
+@cached
 def fit_title(text, max_width=560):
     """The chunky title, as big as still fits in max_width (long names shrink)."""
     img = None
@@ -237,6 +250,7 @@ def background(w, h, seed=7, blur=5):
     return Image.alpha_composite(img, Image.new("RGBA", (w, h), (10, 18, 30, 40)))
 
 
+@cached
 def avatar(name, size=32):
     """A little player head made from the name (always the same for the same name)."""
     h = hashlib.md5(name.lower().encode()).digest()
@@ -256,6 +270,7 @@ def avatar(name, size=32):
     return img.resize((size, size), Image.NEAREST)
 
 
+@cached
 def check_mark(s, u=2):
     img = Image.new("RGBA", (s, s), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
@@ -266,6 +281,7 @@ def check_mark(s, u=2):
     return img
 
 
+@cached
 def grass_block(size=16):
     """The app icon: a grass block."""
     rnd = random.Random(5)

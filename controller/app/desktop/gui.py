@@ -194,7 +194,7 @@ class App:
         self.job = Job()
         self.events = queue.Queue()
         self.shared_state, self.shared_error, self.shared_at = None, "", 0.0
-        self.local, self.listening, self.fetching = None, False, False
+        self.local, self.listening, self.polling = None, False, False
         self.busy, self.expect_exit, self.log_start, self.log_pos = "", False, 0, 0
         self.quitting, self.log_started = False, False
         self.tray, self.scene, self.avatars = None, None, {}
@@ -414,22 +414,29 @@ class App:
             self.render()
         self.in_background(work, done)
 
+    def poll_controller(self):
+        """Is the controller up, and what does it say? Connecting to a port nobody listens on takes about a second on
+        Windows, so this must never run on the window's own thread (it used to, and froze the window every tick)."""
+        if self.polling:
+            return
+        self.polling = True
+
+        def work():
+            return (True, self.panel.status()) if self.panel.listening() else (False, None)
+
+        def done(result, _error):
+            self.polling = False
+            self.listening, self.local = result if result else (False, None)
+            self.render()
+        self.in_background(work, done)
+
     def tick(self):
         if self.tick_job is not None:                    # show_main() can run again (a rename): one timer only
             self.root.after_cancel(self.tick_job)
             self.tick_job = None
         if self.home.identity_stamp() != self.ident_stamp:
             return self.show_main()                      # the name, description or picture changed: redraw the header
-        self.listening = self.panel.listening()
-        if self.listening and not self.fetching:
-            self.fetching = True
-
-            def done(status, _error):
-                self.fetching, self.local = False, status
-                self.render()
-            self.in_background(self.panel.status, done)
-        elif not self.listening:
-            self.local = None
+        self.poll_controller()                           # in the background: it can take a second on Windows
         if self.controller.proc is not None and not self.controller.running():
             self.controller_ended()
         if self.expect_exit and not self.hosting():
@@ -547,7 +554,7 @@ class App:
                 and time.time() - float(s.get("lastSeen", 0)) < STALE_SECONDS:
             return messagebox.showinfo(APP_NAME, f"{s.get('host')} is hosting right now. Join their server, or ask "
                                                  "them to stop hosting first.")
-        if self.panel.listening():
+        if self.listening and not self.controller.running():     # (the last background check, so no pause here)
             return messagebox.showwarning(APP_NAME, "Something is already using this PC's server port (the old "
                                                     "Start SMP window?). Close it first.")
         if self.home.uses_tunnel(self.tools) and other_playit_running() and not self.stop_other_playit():
