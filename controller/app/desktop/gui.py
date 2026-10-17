@@ -435,7 +435,7 @@ class App:
             self.refresh_shared()
             if not self.quitting:
                 messagebox.showinfo(APP_NAME, "Done: the world is uploaded and someone else can host now.")
-        if not self.hosting() and time.time() - self.shared_at > SHARED_EVERY:
+        if time.time() - self.shared_at > SHARED_EVERY:          # also while hosting, so the box never goes stale
             self.refresh_shared()
         self.read_log()
         self.render()
@@ -502,7 +502,10 @@ class App:
                 shared += "Hosting now: nobody"
                 light, light_text = "#4cc04c", "Free: you can start"
             if s.get("pushing"):
-                shared += f"\n{s.get('pushingBy') or 'someone'}'s last upload never finished!"
+                if s.get("pushingBy") == me and self.hosting():
+                    shared += "\nUploading the world right now..."
+                else:
+                    shared += f"\n{s.get('pushingBy') or 'someone'}'s last upload never finished!"
         self.shared_txt.set(shared)
         self.scene.canvas.itemconfig(self.light, fill=light)
         self.light_txt.set(light_text)
@@ -531,7 +534,7 @@ class App:
                 self.scene.canvas.itemconfig(item, state="hidden")
         hosting = self.hosting()
         self.host_btn.set_enabled(not hosting and not self.busy)
-        self.stop_btn.set_enabled(hosting and not self.expect_exit)
+        self.stop_btn.set_enabled(hosting and not self.expect_exit and not self.busy)
         self.panel_btn.set_enabled(self.listening)
 
     # -- actions --------------------------------------------------------------------------------------
@@ -599,9 +602,11 @@ class App:
                 if then:
                     then()
             return
-        self.busy = "Asking the server to stop..."
+        self.busy = "Saving, uploading the world and handing over... Keep the PC on until this says Done."
 
         def done(result, error):
+            if isinstance(error, TimeoutError):                  # a very slow upload: it is still working, just wait
+                return self._stopping(then)
             ok, why = result if result else (False, str(error))
             if ok:
                 return self._stopping(then)

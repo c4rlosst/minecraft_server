@@ -367,6 +367,57 @@ class PanelClientTests(unittest.TestCase):
             self.assertEqual(last_error(log, start), "keeeeo is already hosting.")
 
 
+class SlowHandoverTests(unittest.TestCase):
+    """Stopping saves and uploads the world, which can take minutes: the app must wait for the real answer."""
+
+    def test_the_stop_request_waits_much_longer_than_a_status_request(self):
+        from app.desktop import runner
+        seen = []
+        panel = Panel(1, "pw")
+        panel._request = lambda method, path, body=None, timeout=None: (seen.append((path, timeout)) or (200, {}))
+        panel.status()
+        panel.handover()
+        panel.quit()
+        self.assertEqual(seen, [("/api/status", None), ("/api/handover", runner.LONG_WAIT), ("/api/quit", runner.LONG_WAIT)])
+        self.assertGreaterEqual(runner.LONG_WAIT, 600)
+
+
+class HandoverRaceTests(unittest.TestCase):
+    def test_a_second_hand_over_and_a_second_upload_are_not_started(self):
+        from app.hosting import Hosting
+        from app.shared import HostingError
+
+        class World:
+            def __init__(self):
+                self.pushes = 0
+
+            def push(self):
+                self.pushes += 1
+                time.sleep(0.05)
+                return 1, 10
+
+            def release(self):
+                pass
+
+        class Manager:
+            state, players, names = "asleep", 0, []
+
+        async def go():
+            world = World()
+            hosting = Hosting(world, Manager())
+            hosting.mark_started()
+            await asyncio.gather(hosting.push_after_stop(), hosting.push_after_stop(), hosting.push_after_stop())
+            first = world.pushes
+            hosting.mark_started()
+            results = await asyncio.gather(hosting.handover(), hosting.handover(), return_exceptions=True)
+            return first, world.pushes, results
+        first, total, results = asyncio.run(go())
+        self.assertEqual(first, 1)                                    # three callers, one upload
+        self.assertEqual(total, 2)                                    # the hand over uploaded once more, only once
+        self.assertEqual(sum(1 for r in results if r == "handed over"), 1)
+        self.assertEqual(sum(1 for r in results if isinstance(r, HostingError)), 1)
+
+
 class FriendlyLogTests(unittest.TestCase):
     def test_log_lines_are_shortened_and_noise_is_dropped(self):
         from app.desktop.gui import friendly_log
