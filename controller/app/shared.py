@@ -19,7 +19,7 @@ log = logging.getLogger("shared")
 SYNC_DIRS = ("world", "mods", "config", "EasyAuth")
 SYNC_FILES = ("server.properties", "ops.json", "whitelist.json", "banned-players.json", "banned-ips.json",
               "usercache.json")
-SKIP_NAMES = {"session.lock"}
+SKIP_NAMES = {"session.lock", "desktop.ini"}   # desktop.ini: Google Drive adds one to every folder it syncs
 STALE_SECONDS = 300
 
 
