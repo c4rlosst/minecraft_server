@@ -11,6 +11,7 @@ import urllib.request
 from .home import CONTROLLER_DIR, Home, Tools
 
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+LONG_WAIT = 900          # seconds: stopping saves the world and uploads it, which can take minutes on a slow connection
 
 
 class Panel:
@@ -28,12 +29,12 @@ class Panel:
         except OSError:
             return False
 
-    def _request(self, method: str, path: str, body=None):
+    def _request(self, method: str, path: str, body=None, timeout: float = None):
         data = json.dumps(body).encode() if body is not None else (b"" if method == "POST" else None)
         req = urllib.request.Request(self.base + path, data=data, method=method,
                                      headers={"Content-Type": "application/json"})
         try:
-            with self.opener.open(req, timeout=self.timeout) as resp:
+            with self.opener.open(req, timeout=timeout or self.timeout) as resp:
                 return resp.status, json.loads(resp.read() or b"{}")
         except urllib.error.HTTPError as exc:
             try:
@@ -43,13 +44,13 @@ class Panel:
             finally:
                 exc.close()
 
-    def call(self, method: str, path: str, body=None):
-        status, data = self._request(method, path, body)
+    def call(self, method: str, path: str, body=None, timeout: float = None):
+        status, data = self._request(method, path, body, timeout)
         if status == 401:                        # not logged in yet (or the controller restarted): log in once
             status, data = self._request("POST", "/api/login", {"password": self.password})
             if status != 200:
                 return status, data
-            status, data = self._request(method, path, body)
+            status, data = self._request(method, path, body, timeout)
         return status, data
 
     def status(self):
@@ -62,11 +63,11 @@ class Panel:
 
     def handover(self):
         """(True, '') when the controller is uploading and will close; (False, why) otherwise."""
-        status, data = self.call("POST", "/api/handover")
+        status, data = self.call("POST", "/api/handover", timeout=LONG_WAIT)     # it answers when the upload is done
         return status == 200, data.get("error", "")
 
     def quit(self) -> bool:
-        status, _data = self.call("POST", "/api/quit")
+        status, _data = self.call("POST", "/api/quit", timeout=LONG_WAIT)
         return status == 200
 
     def reload_identity(self) -> bool:
