@@ -1,76 +1,106 @@
-# Taking turns hosting (two trusted people, one world)
+# Taking turns hosting (one world, several PCs)
 
-Two people can host the same world from their own PCs, one at a time, through a shared **Google Drive** folder.
-Whoever starts their controller **takes a lock**, downloads the latest world, runs the server (and the tunnel and Discord
-bot), uploads the world every time the server falls asleep, and gives the lock back when they hand over.
-The address stays the same, because both PCs use the same playit agent.
+Friends can host the same world from their own PCs, one at a time. Whoever starts their controller takes a lock,
+downloads the latest world, runs the server, tunnel and Discord bot, uploads the world each time the server falls asleep,
+and gives the lock back on a hand over. The world lives in free cloud storage (Backblaze B2), and the address stays the
+same because every PC uses the same playit agent. Only share this with people you trust completely: a host has the
+world, the players' passwords and the bot token.
 
-```
-shared Drive folder:   state.json  (who is hosting)      data/  (world, mods, config, EasyAuth passwords, ops/bans)
-```
+## The easy way: the SMP Host app
 
-Only share this with someone you trust completely: a host has full access to the world, the players' passwords and the
-bot token.
+A normal Windows app (`SMP-Host-Setup.exe`, built with `.\desktop\build.ps1` into `desktop\dist\`) with Java, rclone
+and the playit agent inside. Like GitHub Desktop for the world: it shows the shared world (version, who uploaded it, who
+hosts now) and this PC, **Start hosting** pulls the latest world and hosts, **Stop hosting** uploads and hands over.
+It has a Minecraft look, and the server's own **name, description and picture** are shown at the top.
 
-## Recommended: rclone with Backblaze B2 (no Google Drive at all)
+**Once, the owner:**
+1. Backblaze website: an account, a **private bucket**, and an application key **per person** (you too): that bucket
+   only, **Read and Write**. See the steps under "Without the app" below.
+2. Put your world in the bucket (close the old Start SMP window first): `.\setup-sharing.ps1`, your key, answer `y`.
+3. Make your own invite: `.\make-invite.ps1` with your key (it's copied to the clipboard).
+4. Install `SMP-Host-Setup.exe`, paste the invite, tick the EULA box, **Set up**. From now on use the app instead of
+   Start SMP (never both: they'd share the same ports).
 
-A synced Drive folder is slow and unreliable for this: the desktop app syncs in the background, so one PC can see the
-other's changes (the lock too) late, and it litters folders with `desktop.ini`. With **rclone** the controller talks to
-cloud storage directly, so:
-- the lock is seen by the other PC **at once**, and nobody has to wait for "Up to date";
-- only the files that changed are uploaded or downloaded, in parallel;
-- every upload keeps what it replaced for 7 days in `history/`, so a bad upload can be undone;
-- an upload is refused if this PC's world looks wrong (fewer player files than the shared one, no `level.dat`, or half
-  the files missing), so a half-finished download or a brand new default world can't replace the real one.
+**Each friend:** in the app click **Invite friend**, paste the key you made for them, and send them the code and
+`SMP-Host-Setup.exe` **privately**. They install it, paste the code, and click **Start hosting** when it's their turn.
 
-[Backblaze B2](https://www.backblaze.com/sign-up/b2-cloud-storage-backup-archive) gives 10 GB free and says no credit card
-is needed (check the sign-up page). The world is about 0.4 GB.
+Good to know: Windows may say "Windows protected your PC" for the **installer** the first time, because it isn't code
+signed: **More info -> Run anyway**. The app itself has no custom `.exe`: its shortcut starts a bundled, digitally signed
+`pythonw.exe` on plain Python files. (A program frozen into one `.exe` with PyInstaller got flagged by Windows Defender
+as `Trojan:Win32/Bearfoos.A!ml`, a machine-learning false alarm that hits many such programs, so this build avoids it.)
+The separate playit app must not run at the same time (the app runs its own agent and warns you). The world, settings
+and backups live in `%LOCALAPPDATA%\SMP Host` and stay there if the app is uninstalled.
 
-**Once (the owner):**
-1. Create a B2 account, then **Buckets -> Create a Bucket**: a unique name such as `japax-world-4821`, **Private**,
-   encryption and object lock off, and (if offered) the lifecycle setting **"Keep only the last version of the file"**.
-2. **Application Keys -> Add a New Application Key**: one key per person (e.g. `owner-pc`, later `friend-pc`), access to
-   **that one bucket only**, **Read and Write**. Copy the keyID and applicationKey right away (shown once). A key can be
-   revoked any time without affecting the others, and it can't touch anything but that bucket.
+## Server name, description and picture
 
-**On each PC** (the owner's and the co-host's), in PowerShell:
+Click **Server info** in the app. Change the **name**, an optional one-line **description**, and the **picture** (any PNG,
+JPG, GIF, BMP or WEBP: it is cropped to a square and made 64x64, the size Minecraft shows next to the name). A preview
+shows how it looks in the Minecraft server list. This is what players see:
+- **While the server sleeps:** the controller answers the server list itself, with your picture, the name in bold and
+  "Asleep - (your description)".
+- **While it is awake:** the real server shows the same name, description and picture (they are written into
+  `server.properties` and `server-icon.png` each time it wakes).
+
+It is **shared with everyone who hosts**: saving uploads the three to the shared storage, and every host picks up the
+newest at its next start (the app also checks while it is open). The name is plain text up to 32 characters, the
+description up to 60. Nothing about the server's name is built into the app.
+
+## Without the app (scripts)
+
+**The owner, on the [Backblaze B2](https://www.backblaze.com/sign-up/b2-cloud-storage-backup-archive) website** (10 GB
+free, and the sign-up page says no credit card; the world is about 0.4 GB):
+1. Sign up.
+2. **Buckets -> Create a Bucket**: a unique name like `my-world-4821`, **Private**.
+3. **Application Keys -> Add a New Application Key**, once for each person: access to **that bucket only**, **Read and
+   Write**. Copy its keyID and applicationKey right away (shown only once). Send each friend their own key **privately**.
+
+**Then on each PC, the owner first,** in PowerShell in the `minecraft_server` folder (close the controller first):
 ```powershell
-winget install Rclone.Rclone
+git pull
+.\setup-sharing.ps1
 ```
-Open a **new** PowerShell, then create the remote with that person's own key (it stays on that PC, in
-`%APPDATA%\rclone\rclone.conf`; never post it anywhere):
-```powershell
-rclone config create jx b2 account=YOUR_KEY_ID key=YOUR_APPLICATION_KEY
-rclone lsd jx:
-```
-The second line should list the bucket. Then in `controller.env` (leave `SHARED_DIR` empty; `HOST_NAME` stays unique per PC):
-```
-SHARED_REMOTE=jx:japax-world-4821
-```
-**The very first time,** put the owner's world into the bucket (close the controller first):
-```powershell
-.\shared-world.ps1 upload
-.\shared-world.ps1 status       # who is hosting, which upload is stored, and whether it matches the record
-```
-After that the controller works exactly like before: taking turns, hand over, the playit tunnel. No Google Drive app is
-needed on any PC.
+Paste the bucket name, that person's keyID and applicationKey, and a name for the PC (different on every PC). The script
+installs rclone, saves the settings, and on the owner's PC uploads the world (answer `y`; only the owner, only once).
+Then start the controller again (your Start shortcut, or `.\run-controller.ps1`). That's all; no Google Drive anywhere.
 
-**Other storage:** Google Drive through rclone (`rclone config create jx drive scope=drive root_folder_id=<FOLDER_ID>`, sign
-in once in the browser, `SHARED_REMOTE=jx:`), Cloudflare R2 (its docs describe a checkout step, so it may want a card), and
-anything else rclone supports: run `rclone config`, then point `SHARED_REMOTE` at `remote-name:bucket-or-folder`. Settings (all
-optional): `SHARED_HISTORY_DAYS=7` (0 turns the history off), `RCLONE_EXE`, and `SHARED_SKIP_CHECKS=1` to upload even when the
-safety check refuses (only if you really did remove players or files).
+A brand new co-host PC first needs the normal install (`setup.ps1`, `install-controller.ps1`), a copy of the owner's
+`controller.env` and the playit identity file: see "The co-host's PC" and "The same address (playit)" further down.
 
-Undo a bad upload: stop the controller, find the upload in `rclone lsf jx:history/` (the folder name is its time, UTC),
-copy it back with `rclone copy jx:history/<time> jx:data`, and start once with `.\run-controller.ps1 -Takeover` (the
-record of the last upload no longer matches, and the next upload fixes it).
+## Every day
 
-The rest of this page describes the older way, a Drive-synced folder; the steps for taking turns are the same in both.
+- **Host:** double-click your Start shortcut (or `.\run-controller.ps1`). If someone else is hosting, it says so and closes.
+- **Switch hosts:** **Hand over hosting** in the panel, or `/jarvis handover` in Discord (refused while anyone plays).
+  Then the other person starts theirs.
+- **Who is hosting?** `/jarvis status`, or `.\shared-world.ps1 status`.
+- **Don't close the window with the X while hosting.** If it happens anyway, start it again on the same PC and it carries on.
+
+## What keeps the world safe (automatic)
+
+- The lock is seen by the other PC at once, so two people can never host at the same moment.
+- Only changed files are uploaded or downloaded, in parallel.
+- An upload is refused if this PC's world looks wrong (fewer player files than the shared one, no `level.dat`, or half
+  the files missing), so a half-finished download or a fresh default world can never replace the real one.
+- A download or upload that was cut off is detected and redone.
+- Every upload keeps what it replaced for 7 days. To undo a bad upload: stop the controller, list them with
+  `rclone lsf smp:<bucket>/history/` (named by time, UTC), copy one back with
+  `rclone copy smp:<bucket>/history/<time> smp:<bucket>/data`, and start once with `.\run-controller.ps1 -Takeover`.
+- Each PC also keeps its own zip backups in `backups\`.
+
+Other storage works too (anything rclone supports): set it up with `rclone config`, then run
+`.\setup-sharing.ps1 -Remote name:folder`. Optional settings in `controller.env`: `SHARED_HISTORY_DAYS` (7; 0 = off) and
+`SHARED_SKIP_CHECKS=1` (upload even when the safety check refuses; only if you really removed players or files).
+
+---
+
+## The older way: a Google Drive folder (not recommended)
+
+It works with a folder synced by Google Drive for desktop (`SHARED_DIR`) instead, but Drive syncs late (the lock too)
+and adds `desktop.ini` files everywhere. Everything below about the co-host's PC, playit and voice chat applies to both ways.
 
 ## One-time setup
 
 **1. Shared folder (the owner).** Install [Google Drive for desktop](https://www.google.com/drive/download/). Create a
-folder, e.g. `JAPAX-world`, and **share it with your co-host as Editor**.
+folder, e.g. `my-world`, and **share it with your co-host as Editor**.
 
 **2. Shared folder (the co-host).** Install Drive for desktop, open the invitation, and choose **Add shortcut to My
 Drive**. In Drive's settings, set that folder to **Available offline** (or use "Mirror files"), otherwise the files may
@@ -87,7 +117,7 @@ cd minecraft_server
 **4. Settings (both PCs).** In `controller.env` set the path to the shared folder **as it appears on that PC** and your
 own name:
 ```
-SHARED_DIR=G:\My Drive\JAPAX-world
+SHARED_DIR=G:\My Drive\my-world
 HOST_NAME=YourName
 ```
 The co-host also needs the owner's `controller.env` first (it holds the RCON and panel passwords and the Discord token),
@@ -119,7 +149,7 @@ any download replaces a PC's local world, the controller saves a zip of it in `b
 
 ## Every day
 
-- **Start hosting:** double-click **Start JAPAX x RENE** (or `.\run-controller.ps1`). If the other person is hosting, it
+- **Start hosting:** double-click your Start shortcut (or `.\run-controller.ps1`). If the other person is hosting, it
   says so and quits. When it starts, it waits until Drive has fully synced, takes the lock and downloads the world. Discord
   announces "<name>'s PC is now hosting".
 - **While hosting:** it works like before: join to wake the server, it sleeps after 10 empty minutes and then uploads the

@@ -23,6 +23,7 @@ class Config:
     stop_grace: int = 120
     poll_seconds: int = 5
     server_name: str = "Our SMP"
+    server_description: str = ""       # second line under the name in players' server lists (see identity.py)
     public_address: str = ""
     ops: str = ""
     account_mode: str = "online"       # "offline": controller writes whitelist/ops by offline UUID (see offline.py)
@@ -47,7 +48,7 @@ class Config:
     discord_blocked_ids: str = ""      # comma separated Discord user IDs who may not use the commands
     # shared hosting (two or more people take turns hosting through a shared folder, e.g. Google Drive)
     shared_dir: str = ""
-    shared_remote: str = ""            # shared hosting through rclone instead of a synced folder, e.g. jx:  or  jx:japax-world
+    shared_remote: str = ""            # shared hosting through rclone instead of a synced folder, e.g. jx:  or  jx:my-world
     rclone_exe: str = "rclone"
     shared_history_days: int = 7       # keep what each upload replaced for this many days (0 = off); rclone mode only
     shared_skip_checks: bool = False   # upload even when this PC's world looks incomplete or wrong
@@ -55,6 +56,7 @@ class Config:
     takeover: bool = False             # take over a lock left by a crashed host (loses its un-uploaded progress)
     claim_wait: int = 20               # seconds to wait after claiming the lock, to catch a simultaneous claim
     playit_exe: str = ""               # shared hosting: the controller starts/stops this agent itself, after taking the lock
+    playit_secret_path: str = ""       # set: PLAYIT_EXE is playitd.exe, run as our own process with this secret file
     voice_host: str = ""               # "auto" (use this PC's public IP), "off", "host:port", or "" (don't touch)
     # switch the PC off when nobody is on the server and you're away (0 = off). See autoshutdown.py
     auto_shutdown_minutes: int = 0             # server asleep (nobody online) for this long
@@ -62,6 +64,11 @@ class Config:
     auto_shutdown_warning_seconds: int = 60    # on-screen warning with a Cancel button
     auto_shutdown_drive_wait: int = 120        # shared hosting: seconds Windows waits so Drive can finish syncing
     auto_shutdown_force: bool = False          # True closes programs without asking (may lose unsaved work)
+
+    @property
+    def server_icon_path(self) -> str:
+        """The 64x64 picture Minecraft shows next to the name (also used while the server sleeps)."""
+        return os.path.join(self.server_dir, "server-icon.png") if self.server_dir else ""
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -81,6 +88,7 @@ class Config:
             stop_grace=_int("STOP_GRACE", 120),
             poll_seconds=_int("POLL_SECONDS", 5),
             server_name=env("SERVER_NAME", "Our SMP"),
+            server_description=env("SERVER_DESCRIPTION", "").strip(),
             public_address=env("PUBLIC_ADDRESS", ""),
             ops=env("OPS", ""),
             account_mode=env("ACCOUNT_MODE", "online").strip().lower(),
@@ -111,6 +119,7 @@ class Config:
             takeover=env("TAKEOVER", "") == "1",
             claim_wait=_int("CLAIM_WAIT", 20),
             playit_exe=env("PLAYIT_EXE", "").strip(),
+            playit_secret_path=env("PLAYIT_SECRET_PATH", "").strip(),
             voice_host=env("VOICE_HOST", "").strip(),
             auto_shutdown_minutes=_int("AUTO_SHUTDOWN_MINUTES", 0),
             auto_shutdown_user_idle_minutes=_int("AUTO_SHUTDOWN_USER_IDLE_MINUTES", 10),

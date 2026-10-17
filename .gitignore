@@ -9,3 +9,6 @@ cloud/state/
 cloud/backups/
 __pycache__/
 aternos-upload/
+desktop/vendor/
+desktop/build/
+desktop/dist/

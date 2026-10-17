@@ -3,6 +3,7 @@ itself and wakes the server when a whitelisted player tries to join."""
 import asyncio
 import logging
 
+from . import identity
 from . import mcproto as proto
 
 log = logging.getLogger("gateway")
@@ -77,16 +78,25 @@ class Gateway:
         up_writer.close()
         return True
 
+    def state_line(self, state: str) -> str:
+        """Line 2 of the server list entry. While asleep it carries the description, so players still see what the
+        server is about ('Asleep - Survival with friends'); without one it says how to wake it."""
+        description = getattr(self.cfg, "server_description", "")
+        if state == "asleep" and description:
+            return f"§eAsleep §7- {description[:46]}"
+        return MOTD.get(state, MOTD["error"])
+
     async def _status(self, reader, writer, hs):
         raw = bytearray()
         for _ in range(2):  # status request, then optional ping
             packet_id, data = await asyncio.wait_for(proto.read_packet(reader, raw, 64), 5)
             if packet_id == 0x00:
                 state = self.manager.state
-                motd = f"§l{self.cfg.server_name}§r\n{MOTD.get(state, MOTD['error'])}"   # name on line 1, state on line 2
+                motd = f"§l{self.cfg.server_name}§r\n{self.state_line(state)}"   # name on line 1, state on line 2
                 writer.write(proto.status_response(
                     hs["protocol"], state.capitalize(), motd,
-                    self.manager.players, self.manager.max_players))
+                    self.manager.players, self.manager.max_players,
+                    favicon=identity.icon_data_uri(self.cfg.server_icon_path) if self.cfg.server_icon_path else None))
             elif packet_id == 0x01:
                 writer.write(proto.frame(0x01, data))
                 await writer.drain()
