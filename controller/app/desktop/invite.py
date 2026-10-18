@@ -18,6 +18,8 @@ SHARED_KEYS = ("RCON_PASSWORD", "SERVER_NAME", "SERVER_DESCRIPTION", "PUBLIC_ADD
                "MC_MEMORY", "IDLE_MINUTES", "START_GRACE_MINUTES", "BACKUPS_KEEP", "SHARED_HISTORY_DAYS",
                "DISCORD_TOKEN", "DISCORD_GUILD_ID", "DISCORD_CHANNEL_ID", "DISCORD_ROLE_ID", "DISCORD_BLOCKED_IDS")
 REQUIRED_KEYS = ("RCON_PASSWORD",)
+STORAGE_FIELDS = {"b2": ("bucket", "account", "key"),                         # Backblaze: keyID + applicationKey
+                  "r2": ("bucket", "account_id", "access_key", "secret_key")}  # Cloudflare R2: S3-style key pair
 
 
 class InviteError(Exception):
@@ -38,8 +40,10 @@ def make(env: dict, playit_toml: str, storage: dict) -> str:
     missing = [k for k in REQUIRED_KEYS if not env.get(k)]
     if missing:
         raise InviteError(f"controller.env has no {', '.join(missing)}.")
-    if storage.get("type") == "b2" and not all(storage.get(k) for k in ("bucket", "account", "key")):
+    if storage.get("type") == "b2" and not all(storage.get(k) for k in STORAGE_FIELDS["b2"]):
         raise InviteError("The bucket name, keyID and applicationKey are all needed.")
+    if storage.get("type") == "r2" and not all(storage.get(k) for k in STORAGE_FIELDS["r2"]):
+        raise InviteError("The bucket name, Cloudflare account ID, access key ID and secret access key are all needed.")
     data = {"v": 1, "env": {k: env[k] for k in SHARED_KEYS if env.get(k)}, "storage": storage,
             "playit": playit_toml or ""}
     packed = zlib.compress(json.dumps(data, separators=(",", ":")).encode("utf-8"), 9)
@@ -58,8 +62,8 @@ def read(code: str) -> dict:
     if data.get("v") != 1:
         raise InviteError("This invite is from a newer version of SMP Host. Update the app.")
     storage = data.get("storage") or {}
-    if storage.get("type") == "b2":
-        if not all(storage.get(k) for k in ("bucket", "account", "key")):
+    if storage.get("type") in STORAGE_FIELDS:
+        if not all(storage.get(k) for k in STORAGE_FIELDS[storage["type"]]):
             raise InviteError("The invite is missing its storage key.")
     elif storage.get("type") == "remote":
         if not storage.get("remote"):

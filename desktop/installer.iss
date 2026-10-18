@@ -2,7 +2,7 @@
 ; The world, settings and backups live in %LOCALAPPDATA%\SMP Host and are kept when the app is uninstalled.
 ; The shortcut starts the bundled python.org pythonw.exe (signed) on smp_host.pyw: there is no custom .exe in the app.
 #define AppName "SMP Host"
-#define AppVersion "1.0.2"
+#define AppVersion "1.0.3"
 
 [Setup]
 AppId={{6F3C2A9E-4B7D-4E8A-9C21-5D0B7E1A3F44}

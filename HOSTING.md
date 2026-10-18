@@ -31,6 +31,29 @@ as `Trojan:Win32/Bearfoos.A!ml`, a machine-learning false alarm that hits many s
 The separate playit app must not run at the same time (the app runs its own agent and warns you). The world, settings
 and backups live in `%LOCALAPPDATA%\SMP Host` and stay there if the app is uninstalled.
 
+## Cloudflare R2 instead of Backblaze (no daily limit)
+
+Backblaze's free plan blocks requests once a small **daily** allowance is used up ("transaction cap exceeded", resets at
+8 AM Philippine time). **Cloudflare R2** has no daily cap: its free amounts are monthly and much larger (10 GB of
+storage, about 1 million writes and 10 million reads a month; check Cloudflare's R2 pricing page for today's numbers),
+and a small SMP stays far below them. Signing up asks for a payment card, but nothing is charged inside the free amounts.
+The app works with either; an invite says which one.
+
+**Once, the owner:**
+1. Cloudflare dashboard: **R2 Object Storage** (it asks for a card), then **Create bucket** (a name like `japax-world`).
+2. On the R2 page, note the **Account ID** (also in the S3 API address `https://<account id>.r2.cloudflarestorage.com`).
+3. **Manage API tokens -> Create API token**: permission **Object Read & Write**, applied to **that bucket only**. Copy the
+   **Access Key ID** and **Secret Access Key** right away (shown once). Make one token for you and one per friend.
+4. Everyone is on the latest SMP Host and **nobody is hosting**. On the owner's PC, close SMP Host and run
+   `.\move-to-r2.ps1` (account ID, bucket, your Access Key ID, then the secret, which stays hidden). It copies the world,
+   checks every file arrived, points this PC at R2 and marks the old Backblaze bucket as "moved" so nobody can carry on
+   hosting there by accident (the undo history is not copied). Keep the Backblaze bucket for a while as a backup.
+5. Open SMP Host, **Start hosting** once to check, then **Stop hosting**.
+
+**Each friend:** in the app click **Invite friend** (it asks for their Access Key ID and Secret Access Key) and send them
+the code privately. They install the new SMP Host, click **New invite** (top left), paste the code and **Set up**. Their
+name for this PC and their own settings stay.
+
 ## Server name, description and picture
 
 Click **Server info** in the app. Change the **name**, an optional one-line **description**, and the **picture** (any PNG,

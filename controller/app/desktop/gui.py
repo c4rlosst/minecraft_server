@@ -255,7 +255,13 @@ class App:
         self.root.clipboard_append(text)
 
     # -- first start: the invite --------------------------------------------------------------------
-    def show_setup(self):
+    def new_invite(self):
+        """Set up again from a new invite (the server moved to other storage, or a key was replaced)."""
+        if self.hosting():
+            return messagebox.showinfo(APP_NAME, "Stop hosting first, then use a new invite.")
+        self.show_setup(can_cancel=True)
+
+    def show_setup(self, can_cancel=False):
         s = self.new_scene()
         img, top = backdrop(APP_NAME.upper())
         px, py, pw, ph = 60, top + 24, W - 120, H - top - 44
@@ -270,13 +276,15 @@ class App:
         self.invite_box = s.field(tk.Text(s.canvas, wrap="char", padx=8, pady=6, **s.entry_style(10)),
                                   x, py + 86, pw - 48, 84)
         s.text(x, py + 190, "2. A name for this PC (others see it while you host)", 11, pixel.LABEL)
-        self.name_var = tk.StringVar(value=os.environ.get("USERNAME", ""))
+        self.name_var = tk.StringVar(value=self.home.settings().get("HOST_NAME") or os.environ.get("USERNAME", ""))
         s.field(tk.Entry(s.canvas, textvariable=self.name_var, **s.entry_style(12)), x, py + 214, 300, 32)
         self.eula = Checkbox(s, x, py + 264, "3. I accept the Minecraft EULA")
         link_x = x + 36 + tk.font.Font(font=s.font(11)).measure("3. I accept the Minecraft EULA") + 12
         s.text(link_x, py + 268, "(read it)", 11, "#2c55c9", tags=("eula_link",))
         s.canvas.tag_bind("eula_link", "<Button-1>", lambda _e: webbrowser.open(EULA_URL))
         self.setup_btn = Button(s, x, py + 312, 200, 40, "Set up", self.do_setup, primary=True)
+        if can_cancel:
+            Button(s, x + 216, py + 312, 140, 40, "Cancel", self.show_main)
         self.setup_msg = s.text(x, py + 368, "", 11, pixel.LABEL, width=pw - 48)
         self.root.after(300, lambda: self.paste_invite(quiet=True))      # an invite already on the clipboard is used
 
@@ -350,6 +358,7 @@ class App:
         s.image(img, 0, 0)
 
         Button(s, W - 20 - 130, 22, 130, 28, "Hide to tray", self.hide_to_tray, size=10)
+        Button(s, 20, 22, 130, 28, "New invite", self.new_invite, size=10)
 
         y = top + 6                                      # under the title: description, then the address to share
         if face["description"]:
@@ -791,12 +800,19 @@ class App:
         s = Scene(win, self.family, dw, dh)
         s.image(pixel.panel(dw, dh), 0, 0)
         s.text(24, 20, "Invite a friend", 14, "#202020", bold=True)
-        s.text(24, 50, "On the Backblaze website, make an application key for your friend (that bucket only, Read "
-                       "and Write). Paste it here.", 10, pixel.LABEL, width=dw - 48)
+        r2 = self.home.storage_kind()["type"] == "r2"
+        if r2:
+            s.text(24, 50, "In Cloudflare (R2 > Manage API tokens), make an API token for your friend: Object Read & "
+                           "Write, this bucket only. Paste its Access Key ID and Secret Access Key here.",
+                   10, pixel.LABEL, width=dw - 48)
+        else:
+            s.text(24, 50, "On the Backblaze website, make an application key for your friend (that bucket only, Read "
+                           "and Write). Paste it here.", 10, pixel.LABEL, width=dw - 48)
         fields, y = {}, 100
         for label, key, default, secret in (("Bucket", "bucket", remote.split(":", 1)[1]
                                              if remote.startswith(REMOTE + ":") else "", False),
-                                            ("keyID", "key_id", "", False), ("applicationKey", "key", "", True)):
+                                            ("Access Key ID" if r2 else "keyID", "key_id", "", False),
+                                            ("Secret Access Key" if r2 else "applicationKey", "key", "", True)):
             s.text(24, y, label, 10, pixel.LABEL)
             var = tk.StringVar(value=default)
             s.field(tk.Entry(s.canvas, textvariable=var, show="*" if secret else "", **s.entry_style(11)),

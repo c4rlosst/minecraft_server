@@ -83,6 +83,13 @@ class Rclone:
             args += ["--backup-dir", backup_dir]
         self._call(*args)
 
+    def copy(self, src: str, dst: str, excludes=(), transfers: int = 8) -> None:
+        """Copy everything from src into dst (between two different storages too). Never deletes anything."""
+        args = ["copy", src, dst, "--transfers", str(transfers), "--checkers", "16", "--fast-list"]
+        for pattern in excludes:
+            args += ["--exclude", pattern]
+        self._call(*args, timeout=4 * 3600)
+
     def copy_files(self, src: str, dst: str, names, backup_dir: str | None = None) -> None:
         """Copy only these files from the top level of src (the ones that exist), never deleting anything."""
         args = ["copy", src, dst, "--max-depth", "1"]
