@@ -358,7 +358,7 @@ class App:
         s.image(img, 0, 0)
 
         Button(s, W - 20 - 130, 22, 130, 28, "Hide to tray", self.hide_to_tray, size=10)
-        Button(s, 20, 22, 130, 28, "New invite", self.new_invite, size=10)
+        Button(s, W - 20 - 130, 56, 130, 28, "New invite", self.new_invite, size=10)   # under it: the picture is top left
 
         y = top + 6                                      # under the title: description, then the address to share
         if face["description"]:
