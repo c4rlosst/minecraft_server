@@ -172,6 +172,7 @@ Keep the token private. Anyone with it controls your bot.
 | `desktop/` | The SMP Host app (`build.ps1` makes `desktop\dist\SMP-Host-Setup.exe`), see [HOSTING.md](HOSTING.md) |
 | `make-invite.ps1` | Make an SMP Host invite from this PC's settings, for yourself or a friend |
 | `setup-sharing.ps1` | Taking turns hosting: one-time setup on each PC (installs rclone, saves the B2 key, uploads the world) |
+| `move-to-r2.ps1` | One-time move of the shared world from Backblaze B2 to Cloudflare R2 (no daily request limit), run by the owner |
 | `shared-world.ps1` | Shared hosting: `status` shows who is hosting and what is stored, `upload` seeds the shared world from this PC |
 | `mods.txt` | Modrinth mod slugs. Re-run `setup.ps1` after editing. Content mods must be installed by every player |
 | `controller/` | The controller (Python) and its tests |

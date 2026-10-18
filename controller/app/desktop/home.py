@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .. import identity
+from . import storage as storage_conf
+from . import storage as storage_conf
 from .invite import parse_env
 
 APP_NAME = "SMP Host"
@@ -127,9 +129,8 @@ class Home:
             raise ValueError("Pick a name for this PC.")
         env = dict(invite["env"])
         storage = invite["storage"]
-        if storage["type"] == "b2":
-            self._write(self.rclone_conf, f"[{REMOTE}]\ntype = b2\naccount = {storage['account']}\n"
-                                          f"key = {storage['key']}\nhard_delete = true\n")
+        if storage["type"] in ("b2", "r2"):
+            self._write(self.rclone_conf, storage_conf.rclone_section(REMOTE, storage))
             env["SHARED_REMOTE"] = f"{REMOTE}:{storage['bucket']}"
         else:                                        # any rclone remote (also how the tests use a plain folder)
             self._write(self.rclone_conf, storage.get("rclone_conf", ""))
@@ -157,9 +158,18 @@ class Home:
         self._write_settings(env)
         return env
 
+    def storage_kind(self) -> dict:
+        """Which cloud storage this PC uses: {'type': 'b2' | 'r2' | 'other' | ''} (r2 also has the 'account_id')."""
+        try:
+            with open(self.rclone_conf, encoding="utf-8") as f:
+                return storage_conf.describe(f.read(), REMOTE)
+        except OSError:
+            return {"type": ""}
+
     def make_invite_for(self, bucket: str, key_id: str, key: str) -> str:
-        """An invite for a friend: this PC's shared settings and tunnel identity, with the friend's own storage key."""
-        from .invite import make
+        """An invite for a friend: this PC's shared settings and tunnel identity, with the friend's own storage key
+        (a Backblaze keyID + applicationKey, or a Cloudflare R2 access key ID + secret, like this PC's own storage)."""
+        from .invite import InviteError, make
         playit = ""
         if os.path.isfile(self.playit_secret):
             with open(self.playit_secret, encoding="utf-8") as f:
@@ -167,6 +177,12 @@ class Home:
         shared = self.settings()
         face = self.identity()                         # the name/description as they are now, not as at setup
         shared.update(SERVER_NAME=face["name"], SERVER_DESCRIPTION=face["description"])
+        kind = self.storage_kind()
+        if kind["type"] == "r2":
+            return make(shared, playit, {"type": "r2", "bucket": bucket.strip(), "account_id": kind["account_id"],
+                                         "access_key": key_id.strip(), "secret_key": key.strip()})
+        if kind["type"] == "other":
+            raise InviteError("This PC uses storage the app can't make invites for.")
         return make(shared, playit, {"type": "b2", "bucket": bucket.strip(), "account": key_id.strip(),
                                      "key": key.strip()})
 
