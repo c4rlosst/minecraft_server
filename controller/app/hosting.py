@@ -18,7 +18,7 @@ class Hosting:
 
     async def heartbeat_loop(self):
         while True:
-            await asyncio.sleep(60)
+            await asyncio.sleep(shared_module.BEAT_SECONDS)
             try:
                 await asyncio.to_thread(self.shared.heartbeat)
             except Exception:

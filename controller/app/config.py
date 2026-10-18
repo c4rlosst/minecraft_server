@@ -66,6 +66,11 @@ class Config:
     auto_shutdown_force: bool = False          # True closes programs without asking (may lose unsaved work)
 
     @property
+    def panel_open(self) -> bool:
+        """No password, and only this PC can reach the panel: it opens straight away (the desktop app's panel)."""
+        return not self.panel_password and self.panel_host in ("127.0.0.1", "localhost", "::1")
+
+    @property
     def server_icon_path(self) -> str:
         """The 64x64 picture Minecraft shows next to the name (also used while the server sleeps)."""
         return os.path.join(self.server_dir, "server-icon.png") if self.server_dir else ""

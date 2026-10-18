@@ -253,6 +253,7 @@ class Home:
         if tools.playitd and os.path.isfile(self.playit_secret):
             env.update(PLAYIT_EXE=tools.playitd, PLAYIT_SECRET_PATH=self.playit_secret)
         env.update(self.settings())                   # this PC's settings win (ports, memory, ...)
+        env["PANEL_PASSWORD"] = ""                    # the panel only opens on this PC, so it needs no password
         return env
 
 

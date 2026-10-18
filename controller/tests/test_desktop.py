@@ -123,7 +123,7 @@ class HomeTests(unittest.TestCase):
         self.home.apply_invite(self.invite, "keeeeo", total_gb=16)
         data = invites.read(self.home.make_invite_for("my-world-4821", "friend-id", "friend-key"))
         self.assertEqual((data["storage"]["account"], data["storage"]["key"]), ("friend-id", "friend-key"))
-        self.assertEqual(data["env"]["PANEL_PASSWORD"], "panel-pw")
+        self.assertNotIn("PANEL_PASSWORD", data["env"])                    # the panel needs no password
         self.assertEqual(data["playit"], PLAYIT)
         self.assertNotIn("HOST_NAME", data["env"])
 

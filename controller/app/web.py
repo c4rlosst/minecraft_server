@@ -1,4 +1,4 @@
-"""Password-protected web panel + JSON API."""
+"""Web panel + JSON API: password-protected, or (desktop app) open but only to pages on this PC."""
 import asyncio
 import hmac
 import logging
@@ -20,12 +20,20 @@ MAX_FAILS, LOCKOUT_SECONDS = 5, 60
 MAX_UPLOAD = 512 * 1024 * 1024
 NOT_AVAILABLE = "Mod uploads need the Windows (process) setup; with Docker, edit MODS in .env instead."
 NOT_ASLEEP = "Stop the server first and wait until it says asleep, then change mods."
+LOCAL_NAMES = ("127.0.0.1", "localhost", "[::1]")
+ASSETS = Path(__file__).parent / "desktop" / "assets"
+
+
+def host_name(host: str) -> str:
+    """'127.0.0.1:8080' -> '127.0.0.1', '[::1]:8080' -> '[::1]'."""
+    return host.split("]")[0] + "]" if host.startswith("[") else host.split(":")[0]
 
 
 def build_app(cfg, manager, hosting=None, on_quit=None) -> web.Application:
     sessions: dict[str, float] = {}
     fails: dict[str, tuple[int, float]] = {}
     page = Path(__file__).parent / "static" / "index.html"
+    open_panel = cfg.panel_open
 
     def client_ip(request) -> str:
         if cfg.trust_proxy:
@@ -35,7 +43,25 @@ def build_app(cfg, manager, hosting=None, on_quit=None) -> web.Application:
         return request.remote or "?"
 
     @web.middleware
+    async def local_only(request, handler):
+        """Without a password, the panel is only safe if nothing but our own page can talk to it. A web page on another
+        site could otherwise send requests to http://127.0.0.1 (even upload a mod). So: the Host must be this PC (stops
+        DNS tricks), a page from another origin is refused, and anything that changes something carries a header that a
+        foreign page can't add without our permission."""
+        if open_panel:
+            if host_name(request.headers.get("Host", "")) not in LOCAL_NAMES:
+                return web.json_response({"error": "This panel only opens on the PC that is hosting."}, status=403)
+            origin = request.headers.get("Origin")
+            if origin and origin != f"{request.scheme}://{request.headers['Host']}":
+                return web.json_response({"error": "Not allowed from another website."}, status=403)
+            if request.method not in ("GET", "HEAD") and request.headers.get("X-SMP-Panel") != "1":
+                return web.json_response({"error": "Not allowed from another website."}, status=403)
+        return await handler(request)
+
+    @web.middleware
     async def auth(request, handler):
+        if open_panel:
+            return await handler(request)
         if request.path.startswith("/api/") and request.path not in ("/api/login", "/api/public"):
             if sessions.get(request.cookies.get("sid", ""), 0) < time.time():
                 return web.json_response({"error": "Not logged in"}, status=401)
@@ -46,9 +72,24 @@ def build_app(cfg, manager, hosting=None, on_quit=None) -> web.Application:
 
     async def public(request):
         snap = manager.snapshot()
-        return web.json_response({k: snap[k] for k in ("state", "players", "max_players", "server_name", "address")})
+        return web.json_response({**{k: snap[k] for k in ("state", "players", "max_players", "server_name", "address")},
+                                  "open": open_panel})
+
+    async def icon(request):
+        data = await asyncio.to_thread(identity.read_icon, cfg.server_dir) if cfg.server_dir else None
+        if data is None:
+            return web.Response(status=404)
+        return web.Response(body=data, content_type="image/png", headers={"Cache-Control": "no-cache"})
+
+    async def font(request):
+        name = {"Monocraft.ttf": "Monocraft.ttf", "Monocraft-Black.ttf": "Monocraft-Black.ttf"}.get(request.match_info["name"])
+        if not name or not (ASSETS / name).is_file():
+            return web.Response(status=404)
+        return web.FileResponse(ASSETS / name, headers={"Cache-Control": "max-age=86400"})
 
     async def login(request):
+        if open_panel:
+            return web.json_response({"ok": True})
         ip = client_ip(request)
         count, until = fails.get(ip, (0, 0.0))
         if count >= MAX_FAILS and time.time() < until:
@@ -196,9 +237,9 @@ def build_app(cfg, manager, hosting=None, on_quit=None) -> web.Application:
             manager.end_maintenance()
         return web.json_response({"removed": name})
 
-    app = web.Application(middlewares=[auth], client_max_size=2 * 1024 * 1024)
+    app = web.Application(middlewares=[local_only, auth], client_max_size=2 * 1024 * 1024)
     app.add_routes([
-        web.get("/", index), web.get("/api/public", public), web.post("/api/login", login),
+        web.get("/", index), web.get("/icon.png", icon), web.get("/fonts/{name}", font), web.get("/api/public", public), web.post("/api/login", login),
         web.post("/api/logout", logout), web.get("/api/status", status), web.post("/api/start", start),
         web.post("/api/stop", stop), web.post("/api/handover", handover), web.post("/api/quit", quit_controller),
         web.post("/api/reload-identity", reload_identity),

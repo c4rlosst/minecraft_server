@@ -34,7 +34,7 @@ class Panel:
     def _request(self, method: str, path: str, body=None, timeout: float = None):
         data = json.dumps(body).encode() if body is not None else (b"" if method == "POST" else None)
         req = urllib.request.Request(self.base + path, data=data, method=method,
-                                     headers={"Content-Type": "application/json"})
+                                     headers={"Content-Type": "application/json", "X-SMP-Panel": "1"})
         try:
             with self.opener.open(req, timeout=timeout or self.timeout) as resp:
                 return resp.status, json.loads(resp.read() or b"{}")

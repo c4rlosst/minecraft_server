@@ -24,8 +24,9 @@ log = logging.getLogger("shared")
 SYNC_DIRS = ("world", "mods", "config", "EasyAuth")
 SYNC_FILES = ("server.properties", "ops.json", "whitelist.json", "banned-players.json", "banned-ips.json",
               "usercache.json")
+BEAT_SECONDS = 120             # between heartbeats; every cloud request counts against a free plan's daily allowance
 VERIFY_EVERY = 10              # heartbeats between real reads of the lock (see SharedWorld.heartbeat)
-LATE_BEAT_SECONDS = 150        # a heartbeat later than this means the PC stalled or slept: read the lock first
+LATE_BEAT_SECONDS = 250        # a heartbeat later than this means the PC stalled or slept: read the lock first
 PULL_MARKER = ".pull-incomplete"
 SKIP_NAMES = {"session.lock", "desktop.ini"}   # desktop.ini: Google Drive adds one to every folder it syncs
 STALE_SECONDS = 300
@@ -38,7 +39,7 @@ class HostingError(Exception):
 def is_cap_error(exc) -> bool:
     """Backblaze (and others) refuse requests once a free daily allowance is used up."""
     text = str(exc).lower()
-    return "cap exceeded" in text or "transaction_cap" in text or "download_cap" in text or "usage cap" in text
+    return "cap exceeded" in text or "transaction_cap" in text or "download_cap" in text or "usage cap" in text         or "free daily limit" in text           # our own plain-words message (cap_message), once it has been wrapped
 
 
 def cap_message(now=None) -> str:

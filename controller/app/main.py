@@ -130,7 +130,7 @@ async def main(app: App):
     server = await asyncio.start_server(gateway.handle, cfg.listen_host, cfg.listen_port)
     log.info("Gateway listening on %s:%s (backend: %s)", cfg.listen_host, cfg.listen_port, cfg.backend)
 
-    if cfg.panel_password:
+    if cfg.panel_password or cfg.panel_open:
         from aiohttp import web
         from .web import build_app
         runner = web.AppRunner(build_app(cfg, manager, hosting, on_quit=quit_event.set))
@@ -138,7 +138,7 @@ async def main(app: App):
         await web.TCPSite(runner, cfg.panel_host, cfg.panel_port).start()
         log.info("Web panel on %s:%s", cfg.panel_host, cfg.panel_port)
     else:
-        log.warning("PANEL_PASSWORD not set: web panel disabled.")
+        log.warning("PANEL_PASSWORD not set (and the panel is not local-only): web panel disabled.")
 
     if cfg.discord_token:
         from .bot import run_bot
