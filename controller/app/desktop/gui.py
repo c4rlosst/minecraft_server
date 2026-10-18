@@ -30,9 +30,12 @@ from . import pixel
 from .home import APP_NAME, EULA_URL, KEEP, REMOTE, REMOVE, Home, find_tools
 from .icon import make_icon
 from .runner import Controller, Panel, last_error, log_size
+from .shutdown import ShutdownGuard
 
 TICK_MS = 1500
-SHARED_EVERY = 15          # seconds between looks at the shared world while not hosting
+SHARED_EVERY = 120         # seconds between automatic looks at the shared world (each is a billable request on a free plan)
+SHARED_EVERY_HOSTING = 300 # ...while hosting, when this PC already knows what is going on
+IDENTITY_EVERY = 600       # seconds between checks for a newer server name/picture
 W, H = 860, 680
 SLOTS = 10
 
@@ -198,7 +201,7 @@ class App:
         self.busy, self.expect_exit, self.log_start, self.log_pos = "", False, 0, 0
         self.quitting, self.log_started = False, False
         self.tray, self.scene, self.avatars = None, None, {}
-        self.tick_job, self.ident_stamp = None, None
+        self.tick_job, self.ident_stamp, self.identity_at = None, None, 0.0
         root.title(APP_NAME)
         root.geometry(f"{W}x{H}")
         root.resizable(False, False)
@@ -207,6 +210,7 @@ class App:
         root.iconphoto(True, icon)
         self._icon = icon
         root.protocol("WM_DELETE_WINDOW", self.on_close)
+        self.guard = ShutdownGuard(root, self.hosting, lambda: self.later(self.shutdown_attempt))
         self.show_main() if home.configured() else self.show_setup()
         root.after(100, self.pump)
 
@@ -360,7 +364,7 @@ class App:
         self.shared_txt = s.text(40, py + 30, "Looking...", 12, "#ffffff", "#3b2410", width=360)
         self.light = s.canvas.create_rectangle(40, py + 150, 52, py + 162, fill="#7f7f7f", outline="#000000", width=2)
         self.light_txt = s.text(60, py + 147, "", 10, "#ffffff", "#3b2410")
-        Button(s, 20 + 400 - 108, py + 180 - 44, 92, 28, "Refresh", self.refresh_shared, size=10)
+        Button(s, 20 + 400 - 108, py + 180 - 44, 92, 28, "Refresh", lambda: self.refresh_shared(full=True), size=10)
 
         s.text(460, py + 16, f"This PC ({settings.get('HOST_NAME', '')})", 11, pixel.LABEL)
         self.local_txt = s.text(460, py + 42, "", 12, "#202020", width=360)
@@ -384,7 +388,7 @@ class App:
                                36, log_y + 16, W - 72, H - log_y - 46)
         size = log_size(self.home.log_path)
         self.log_pos, self.log_started = max(0, size - 6000), False
-        self.refresh_shared()
+        self.refresh_shared(full=True)
         self.tick()
 
     def avatar(self, name):
@@ -396,13 +400,18 @@ class App:
     def hosting(self) -> bool:
         return self.controller.running() or self.listening
 
-    def refresh_shared(self):
+    def refresh_shared(self, full=False):
+        """Look at the shared world. Every look is a billable request on a free cloud plan, so automatic looks are rare;
+        the Refresh button (full) also checks for a newer server name/picture."""
         self.shared_at = time.time()
+        check_face = (full or self.shared_at - self.identity_at > IDENTITY_EVERY) and not self.hosting()
+        if check_face:
+            self.identity_at = self.shared_at
 
         def work():
             world = self.world()
             state = world.read_state()
-            if not self.hosting():                       # while hosting, the controller keeps the server's face in step
+            if check_face:                               # while hosting, the controller keeps the server's face in step
                 try:
                     self.home.sync_identity(world)       # a newer name/picture from a friend, or publish ours
                 except Exception:
@@ -437,6 +446,7 @@ class App:
         if self.home.identity_stamp() != self.ident_stamp:
             return self.show_main()                      # the name, description or picture changed: redraw the header
         self.poll_controller()                           # in the background: it can take a second on Windows
+        self.guard.sync()                                # Windows warns before shutting down while we host
         if self.controller.proc is not None and not self.controller.running():
             self.controller_ended()
         if self.expect_exit and not self.hosting():
@@ -444,7 +454,8 @@ class App:
             self.refresh_shared()
             if not self.quitting:
                 messagebox.showinfo(APP_NAME, "Done: the world is uploaded and someone else can host now.")
-        if time.time() - self.shared_at > SHARED_EVERY:          # also while hosting, so the box never goes stale
+        looking = self.root.state() not in ("withdrawn", "iconic")       # nobody is watching a hidden or minimized window
+        if looking and time.time() - self.shared_at > (SHARED_EVERY_HOSTING if self.hosting() else SHARED_EVERY):
             self.refresh_shared()
         self.read_log()
         self.render()
@@ -815,6 +826,17 @@ class App:
         elif answer is False:
             self.stop_hosting(then=self.quit)
 
+    def shutdown_attempt(self):
+        """Windows is about to shut down (or sign out) while this PC hosts: bring the window up and offer to stop first."""
+        if not self.hosting() or self.busy:
+            return
+        self.show_window()
+        if messagebox.askyesno(APP_NAME, "This PC is shutting down, but you're still hosting.\n\nIf it switches off now, "
+                                         "the latest changes to the world are not uploaded and the next host starts "
+                                         "from an older copy.\n\nStop hosting now (upload and hand over)? "
+                                         "If Windows is asking, choose Cancel there first."):
+            self.stop_hosting()
+
     def hide_to_tray(self):
         try:
             import pystray
@@ -839,8 +861,11 @@ class App:
     def show_window(self):
         self.root.deiconify()
         self.root.lift()
+        if self.scene is not None and hasattr(self, "shared_txt"):
+            self.refresh_shared()                         # it didn't look while hidden: catch up now
 
     def quit(self):
+        self.guard.close()
         if self.tray is not None:
             self.tray.stop()
         self.root.destroy()

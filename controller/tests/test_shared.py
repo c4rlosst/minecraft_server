@@ -355,6 +355,53 @@ class SharedToolTests(Setup):
         self.assertIn("SHARED_REMOTE", out.getvalue())
 
 
+class CloudReadAllowanceTests(Setup):
+    """A free cloud plan allows only a few thousand reads a day, so the heartbeat must not read every minute."""
+
+    def counting_world(self, name="Carlos", server_dir=None):
+        world = self.host(name, server_dir or self.a_dir)
+        world.reads = 0
+        real = world.read_state
+
+        def counted():
+            world.reads += 1
+            return real()
+        world.read_state = counted
+        return world
+
+    def test_heartbeats_read_the_lock_only_now_and_then(self):
+        a = self.counting_world()
+        a.acquire(claim_wait=0)
+        after_claim = a.reads
+        for _ in range(30):                                  # half an hour of heartbeats
+            self.clock.sleep(60)
+            a.heartbeat()
+        self.assertEqual(a.reads - after_claim, 3)           # beats 10, 20 and 30 re-check, the others only write
+        self.assertEqual(a.read_state()["lastSeen"], self.clock.now)      # and the lock stayed fresh the whole time
+
+    def test_a_late_heartbeat_checks_first_and_never_overwrites_someone_elses_lock(self):
+        a = self.counting_world()
+        a.acquire(claim_wait=0)
+        self.clock.sleep(60)
+        a.heartbeat()                                        # fine: cached
+        self.clock.sleep(shared.STALE_SECONDS + 100)         # this PC slept; a friend took over with -Takeover
+        b = self.host("Friend", self.b_dir)
+        b.acquire(takeover=True, claim_wait=0)
+        reads_before = a.reads
+        a.heartbeat()                                        # the PC wakes: the beat is late, so it reads first
+        self.assertEqual(a.reads, reads_before + 1)
+        self.assertEqual(b.read_state()["host"], "Friend")   # the friend's lock is untouched
+        self.assertTrue(b.holds_lock())
+
+    def test_the_free_daily_limit_gets_a_plain_message(self):
+        self.assertTrue(shared.is_cap_error(Exception("Cannot download file, download bandwidth or transaction (Class B) cap exceeded")))
+        self.assertTrue(shared.is_cap_error(Exception("transaction_cap_exceeded")))
+        self.assertFalse(shared.is_cap_error(Exception("no such host")))
+        message = shared.cap_message()
+        self.assertIn("free daily limit", message)
+        self.assertIn("midnight UTC", message)
+
+
 class MirrorTests(Setup):
     def test_unchanged_files_are_not_copied_again_and_deleted_ones_disappear(self):
         src, dst = os.path.join(self.root, "src"), os.path.join(self.root, "dst")
