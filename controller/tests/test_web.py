@@ -205,5 +205,56 @@ class PanelTests(unittest.TestCase):
         self.assertIn("offline mode", message)
 
 
+@unittest.skipIf(aiohttp is None, "aiohttp not installed")
+class OpenPanelTests(unittest.TestCase):
+    """The desktop app's panel: no password, but only for pages on this PC (a website must not be able to drive it)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        server_dir = os.path.join(self.tmp.name, "server")
+        os.makedirs(os.path.join(server_dir, "mods"))
+        self.cfg = Config(panel_password="", panel_host="127.0.0.1", server_dir=server_dir, mc_version="26.3",
+                          state_dir=os.path.join(self.tmp.name, "state"),
+                          whitelist_path=os.path.join(server_dir, "whitelist.json"))
+        self.manager = Manager(self.cfg, FakeRuntime())
+
+    def run_client(self, scenario):
+        async def go():
+            async with TestClient(TestServer(build_app(self.cfg, self.manager))) as client:
+                return await scenario(client)
+        return asyncio.run(go())
+
+    def test_no_password_needed_and_the_page_knows(self):
+        self.assertTrue(self.cfg.panel_open)
+        self.assertFalse(Config(panel_password="", panel_host="0.0.0.0").panel_open)     # reachable by others: not open
+        self.assertFalse(Config(panel_password="x", panel_host="127.0.0.1").panel_open)
+
+        async def scenario(client):
+            status = await client.get("/api/status")
+            public = await (await client.get("/api/public")).json()
+            started = await client.post("/api/start", headers={"X-SMP-Panel": "1"})
+            page = await client.get("/")
+            font = await client.get("/fonts/Monocraft.ttf")
+            return status.status, public["open"], started.status, page.status, font.status
+        self.assertEqual(self.run_client(scenario), (200, True, 200, 200, 200))
+
+    def test_another_website_cannot_use_it(self):
+        async def scenario(client):
+            results = {}
+            # a form post from a foreign page: no custom header, a foreign Origin
+            results["no header"] = (await client.post("/api/start")).status
+            results["foreign origin"] = (await client.post("/api/start", headers={
+                "X-SMP-Panel": "1", "Origin": "https://evil.example"})).status
+            # DNS rebinding: the browser asks for our port under the attacker's own name
+            results["foreign host"] = (await client.get("/api/status", headers={"Host": "evil.example:8080"})).status
+            results["foreign upload"] = (await client.post("/api/mods/upload", data=b"x")).status
+            results["still asleep"] = self.manager.state
+            return results
+        results = self.run_client(scenario)
+        self.assertEqual(results, {"no header": 403, "foreign origin": 403, "foreign host": 403, "foreign upload": 403,
+                                   "still asleep": "asleep"})
+
+
 if __name__ == "__main__":
     unittest.main()

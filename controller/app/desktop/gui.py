@@ -23,7 +23,7 @@ from PIL import Image, ImageTk
 
 from .. import identity
 from ..rclone import Rclone
-from ..shared import STALE_SECONDS, RcloneWorld
+from ..shared import STALE_SECONDS, RcloneWorld, is_cap_error
 from ..sharedtool import _ago as ago
 from . import invite as invites
 from . import pixel
@@ -33,8 +33,9 @@ from .runner import Controller, Panel, last_error, log_size
 from .shutdown import ShutdownGuard
 
 TICK_MS = 1500
-SHARED_EVERY = 120         # seconds between automatic looks at the shared world (each is a billable request on a free plan)
-SHARED_EVERY_HOSTING = 300 # ...while hosting, when this PC already knows what is going on
+SHARED_EVERY = 600         # seconds between automatic looks at the shared world (each is a billable request on a free plan)
+SHARED_EVERY_HOSTING = 1800  # ...while hosting, when this PC already knows what is going on
+CAP_PAUSE = 1800           # ...and after the free daily allowance ran out: asking again only adds noise
 IDENTITY_EVERY = 600       # seconds between checks for a newer server name/picture
 W, H = 860, 680
 SLOTS = 10
@@ -420,6 +421,8 @@ class App:
 
         def done(state, error):
             self.shared_state, self.shared_error = state, (str(error) if error else "")
+            if error and is_cap_error(error):
+                self.shared_at = time.time() + CAP_PAUSE - SHARED_EVERY     # wait longer before the next automatic look
             self.render()
         self.in_background(work, done)
 

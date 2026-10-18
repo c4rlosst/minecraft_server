@@ -1,8 +1,8 @@
-; Inno Setup script for SMP Host (built by build.ps1). Installs for the current user only: no admin rights needed.
+﻿; Inno Setup script for SMP Host (built by build.ps1). Installs for the current user only: no admin rights needed.
 ; The world, settings and backups live in %LOCALAPPDATA%\SMP Host and are kept when the app is uninstalled.
 ; The shortcut starts the bundled python.org pythonw.exe (signed) on smp_host.pyw: there is no custom .exe in the app.
 #define AppName "SMP Host"
-#define AppVersion "1.0.1"
+#define AppVersion "1.0.2"
 
 [Setup]
 AppId={{6F3C2A9E-4B7D-4E8A-9C21-5D0B7E1A3F44}
