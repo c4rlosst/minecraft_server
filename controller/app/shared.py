@@ -14,6 +14,7 @@ import shutil
 import threading
 import time
 import uuid
+from datetime import datetime, timedelta, timezone
 
 from . import identity
 from .rclone import RcloneError, join as rjoin
@@ -23,6 +24,8 @@ log = logging.getLogger("shared")
 SYNC_DIRS = ("world", "mods", "config", "EasyAuth")
 SYNC_FILES = ("server.properties", "ops.json", "whitelist.json", "banned-players.json", "banned-ips.json",
               "usercache.json")
+VERIFY_EVERY = 10              # heartbeats between real reads of the lock (see SharedWorld.heartbeat)
+LATE_BEAT_SECONDS = 150        # a heartbeat later than this means the PC stalled or slept: read the lock first
 PULL_MARKER = ".pull-incomplete"
 SKIP_NAMES = {"session.lock", "desktop.ini"}   # desktop.ini: Google Drive adds one to every folder it syncs
 STALE_SECONDS = 300
@@ -30,6 +33,21 @@ STALE_SECONDS = 300
 
 class HostingError(Exception):
     """Shown to the user: someone else is hosting, the shared folder isn't ready, and so on."""
+
+
+def is_cap_error(exc) -> bool:
+    """Backblaze (and others) refuse requests once a free daily allowance is used up."""
+    text = str(exc).lower()
+    return "cap exceeded" in text or "transaction_cap" in text or "download_cap" in text or "usage cap" in text
+
+
+def cap_message(now=None) -> str:
+    """Plain words for 'the free daily limit is used up', with when it resets (midnight UTC) in the user's own time."""
+    now = now or datetime.now(timezone.utc)
+    reset = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0).astimezone()
+    when = reset.strftime("%I:%M %p").lstrip("0")
+    return ("Backblaze's free daily limit has been used up, so it refuses requests until its counters reset at "
+            f"{when} your time (midnight UTC). Try again then, or raise the limit in Backblaze under Caps & Alerts.")
 
 
 # ---- file helpers ------------------------------------------------------------------------------
@@ -127,6 +145,7 @@ class SharedWorld:
         self.token = None
         self.skip_checks = False        # SHARED_SKIP_CHECKS=1: upload even when this PC's world looks wrong
         self._lock = threading.Lock()   # the heartbeat thread and an upload must not edit state.json at once
+        self._cache, self._last_write, self._beats = None, 0.0, 0       # for heartbeat(): see there
 
     # -- the storage itself: a synced folder here, rclone in RcloneWorld ------------------------------
     def _prepare(self) -> None:
@@ -201,11 +220,18 @@ class SharedWorld:
 
     # -- state file
     def read_state(self):
-        try:
-            with open(self.state_path) as f:
-                return json.load(f)
-        except (OSError, ValueError):
-            return None
+        for attempt in range(6):
+            try:
+                with open(self.state_path) as f:
+                    return json.load(f)
+            except PermissionError:             # Windows: another thread is replacing the file at this very instant
+                time.sleep(0.03 * (attempt + 1))
+            except (OSError, ValueError):
+                return None
+        return None
+
+    def _remember(self, state: dict) -> None:
+        self._cache, self._last_write = dict(state), self.clock()
 
     def _write_state(self, state: dict) -> None:
         tmp = self.state_path + ".tmp"
@@ -214,6 +240,7 @@ class SharedWorld:
         for attempt in range(6):
             try:
                 os.replace(tmp, self.state_path)
+                self._remember(state)
                 return
             except PermissionError:             # Windows: someone (another thread, an antivirus scan) has it open for an instant
                 if attempt == 5:
@@ -264,10 +291,18 @@ class SharedWorld:
         return state
 
     def heartbeat(self) -> None:
+        """Tell the others we are alive (rewrites lastSeen). Reading the lock back every minute would use up a free cloud
+        plan's daily read allowance on its own, so the copy of our last write is reused, and the real file is only read
+        every VERIFY_EVERY beats, or when a beat is late (the PC was asleep: someone may have taken over meanwhile)."""
         with self._lock:
-            state = self.read_state()
+            self._beats += 1
+            now = self.clock()
+            cached = self._cache
+            fresh = (cached and self.token and cached.get("token") == self.token and self._beats % VERIFY_EVERY
+                     and now - self._last_write < LATE_BEAT_SECONDS)
+            state = dict(cached) if fresh else self.read_state()
             if state and self.token and state.get("token") == self.token:
-                state["lastSeen"] = self.clock()
+                state["lastSeen"] = now
                 self._write_state(state)
 
     def release(self) -> None:
@@ -366,6 +401,8 @@ class RcloneWorld(SharedWorld):
         return rjoin(self.remote, *parts)
 
     def _unreachable(self, what: str, exc: Exception) -> HostingError:
+        if is_cap_error(exc):
+            return HostingError(cap_message())
         return HostingError(f"{what} ({self.remote}): {exc}")
 
     # -- the lock file
@@ -387,6 +424,7 @@ class RcloneWorld(SharedWorld):
             self.rclone.put(self._p("state.json"), json.dumps(state).encode("utf-8"))
         except RcloneError as exc:
             raise self._unreachable("Can't write to the shared storage", exc) from None
+        self._remember(state)
 
     # -- the server's name, description and picture
     def read_identity(self):
@@ -485,7 +523,7 @@ class RcloneWorld(SharedWorld):
                     self.rclone.sync(self._p("data", d), os.path.join(self.server_dir, d), excludes=sorted(SKIP_NAMES))
             self.rclone.copy_files(data, self.server_dir, SYNC_FILES)
         except RcloneError as exc:
-            raise HostingError(f"Downloading the world failed: {exc}") from None
+            raise HostingError(cap_message() if is_cap_error(exc) else f"Downloading the world failed: {exc}") from None
 
     def _before_push(self) -> None:
         with self._lock:
@@ -507,7 +545,8 @@ class RcloneWorld(SharedWorld):
                                      backup_dir=rjoin(keep, d) if keep else None)
             self.rclone.copy_files(self.server_dir, self._p("data"), SYNC_FILES, backup_dir=keep)
         except RcloneError as exc:
-            raise HostingError(f"Uploading the world failed: {exc}. Nothing was marked as uploaded; it will be "
+            raise HostingError(cap_message() if is_cap_error(exc) else
+                               f"Uploading the world failed: {exc}. Nothing was marked as uploaded; it will be "
                                "tried again.") from None
         self._prune_history()
         return self._remote_manifest()

@@ -519,5 +519,46 @@ class RealControllerRunTests(unittest.TestCase):
             return "(no log)"
 
 
+@unittest.skipUnless(sys.platform == "win32", "Windows only")
+class ShutdownGuardTests(unittest.TestCase):
+    """A real Tk window is sent the 'Windows wants to shut down' message (it only asks; nothing shuts down)."""
+
+    def setUp(self):
+        import tkinter
+        try:
+            self.root = tkinter.Tk()
+        except tkinter.TclError:
+            self.skipTest("no display")
+        self.root.withdraw()
+
+    def tearDown(self):
+        self.root.destroy()
+
+    def test_shutdown_while_hosting_registers_a_reason_and_is_heard_but_idle_is_ignored(self):
+        import ctypes
+        from app.desktop.shutdown import WM_QUERYENDSESSION, ShutdownGuard
+        state, heard = {"hosting": False}, []
+        guard = ShutdownGuard(self.root, lambda: state["hosting"], lambda: heard.append(1))
+        send = ctypes.windll.user32.SendMessageW
+        send.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_size_t, ctypes.c_ssize_t]
+        send.restype = ctypes.c_ssize_t
+
+        self.assertEqual(send(guard.hwnd, WM_QUERYENDSESSION, 0, 0), 1)       # Tk still answers 'fine'
+        self.root.update()
+        self.assertEqual((heard, guard.blocked), ([], False))                 # not hosting: silent
+
+        state["hosting"] = True
+        guard.sync()
+        self.assertTrue(guard.blocked)
+        self.assertEqual(send(guard.hwnd, WM_QUERYENDSESSION, 0, 0), 1)
+        self.root.update()
+        self.assertEqual(heard, [1])
+
+        state["hosting"] = False
+        guard.sync()
+        self.assertFalse(guard.blocked)
+        guard.close()
+
+
 if __name__ == "__main__":
     unittest.main()

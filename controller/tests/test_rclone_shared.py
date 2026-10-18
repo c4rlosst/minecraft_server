@@ -100,6 +100,14 @@ class UnreachableStorageTests(unittest.TestCase):
             RcloneWorld("jx:japax", tempfile.gettempdir(), "Carlos", rc).acquire(claim_wait=0)
         self.assertIn("winget install Rclone.Rclone", str(ctx.exception))
 
+    def test_hitting_the_free_daily_limit_says_so_instead_of_a_cryptic_error(self):
+        world = self.world(FakeRun(code=1, err=b"ERROR : state.json: Failed to open: Cannot download file, download "
+                                               b"bandwidth or transaction (Class B) cap exceeded."))
+        with self.assertRaises(HostingError) as ctx:
+            world.read_state()
+        self.assertIn("free daily limit", str(ctx.exception))
+        self.assertNotIn("rclone", str(ctx.exception))
+
     def test_unreadable_state_file_is_an_error_not_a_fresh_start(self):
         world = self.world(FakeRun(code=0, out=b"{not json"))
         with self.assertRaises(HostingError) as ctx:
