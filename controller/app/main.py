@@ -55,9 +55,11 @@ async def main(app: App):
         shared, where = build_world(cfg)
         app.shared = shared
         log.info("Taking the hosting lock in %s ...", where)
+        shared.progress.note("Taking the hosting lock...")
         try:
             previous = await asyncio.to_thread(shared.acquire, cfg.takeover, cfg.claim_wait)
         except HostingError as exc:
+            shared.progress.finish()
             log.error("%s", exc)
             print(f"\n  CAN'T HOST RIGHT NOW: {exc}\n")
             return
@@ -80,6 +82,7 @@ async def main(app: App):
             await asyncio.to_thread(identity.sync, shared, cfg.server_dir)
         except Exception as exc:                # never worth blocking the host over
             log.warning("Couldn't sync the server name and picture (%s); using this PC's.", exc)
+        shared.progress.note("Starting the tunnel and the Discord bot...")
         if cfg.playit_exe:                      # only the lock holder runs the tunnel (both PCs share one agent identity)
             from .playit import Playit, PlayitDaemon
             if cfg.playit_secret_path:          # the desktop app: our own agent process, no Windows service needed
@@ -91,6 +94,7 @@ async def main(app: App):
         manager.host_info = {"shared": True, "host": cfg.host_name}
         background.append(asyncio.create_task(hosting.heartbeat_loop()))
         log.info("%s is now hosting.", cfg.host_name)
+        shared.progress.finish()                # ready: the window drops its progress bar
 
     # ---- hooks around the Minecraft server ----------------------------------------------------------
     backup = None

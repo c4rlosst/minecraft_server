@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, timezone
 
 from . import identity
 from . import sessions as session_log
+from .progress import NullProgress, Progress
 from .rclone import RcloneError, join as rjoin
 
 log = logging.getLogger("shared")
@@ -30,6 +31,7 @@ VERIFY_EVERY = 10              # heartbeats between real reads of the lock (see 
 LATE_BEAT_SECONDS = 250        # a heartbeat later than this means the PC stalled or slept: read the lock first
 PULL_MARKER = ".pull-incomplete"
 RESTORE_MARKER = ".restored-world"   # a world put back from a backup on purpose: its next upload skips the checks
+STAGE_NAMES = {"world": "the world", "mods": "the mods", "config": "the settings", "EasyAuth": "the player logins"}
 SKIP_NAMES = {"session.lock", "desktop.ini"}   # desktop.ini: Google Drive adds one to every folder it syncs
 STALE_SECONDS = 300
 
@@ -149,6 +151,7 @@ class SharedWorld:
         self.skip_checks = False        # SHARED_SKIP_CHECKS=1: upload even when this PC's world looks wrong
         self._lock = threading.Lock()   # the heartbeat thread and an upload must not edit state.json at once
         self._cache, self._last_write, self._beats = None, 0.0, 0       # for heartbeat(): see there
+        self.progress = NullProgress()                                  # the window's progress bar (progress.py)
 
     # -- the storage itself: a synced folder here, rclone in RcloneWorld ------------------------------
     def _prepare(self) -> None:
@@ -371,8 +374,30 @@ class SharedWorld:
             pass
         with open(self._pull_marker, "w") as f:
             f.write("A download from the shared folder started and has not finished.\n")
-        self._pull_data()
+        self.progress.begin("download", "Downloading the world", self._stage_weights())
+        try:
+            self._pull_data()
+        finally:
+            self.progress.finish()
         os.remove(self._pull_marker)                           # only reached when everything was copied
+
+    def _stage_weights(self) -> dict:
+        """How big each part of the transfer is (this PC's copy as the guide), so the progress bar fills in proportion."""
+        weights = {}
+        for d in SYNC_DIRS:
+            total = 0
+            for root, _dirs, files in os.walk(os.path.join(self.server_dir, d)):
+                for name in files:
+                    try:
+                        total += os.path.getsize(os.path.join(root, name))
+                    except OSError:
+                        pass
+            weights[d] = total
+        weights["files"] = 1024 * 1024 // 20               # the loose settings files are tiny
+        return weights
+
+    def _progress_cb(self):
+        return None if type(self.progress) is NullProgress else self.progress.transfer
 
     def check_before_upload(self) -> None:
         """Refuse to replace the shared world with one that looks incomplete or wrong (e.g. a half-finished download,
@@ -390,8 +415,12 @@ class SharedWorld:
         if not self.holds_lock():
             raise HostingError("Lost the hosting lock, not uploading the world.")
         self.check_before_upload()
-        self._before_push()
-        count, nbytes = self._push_data()
+        self.progress.begin("upload", "Uploading the world", self._stage_weights())
+        try:
+            self._before_push()
+            count, nbytes = self._push_data()
+        finally:
+            self.progress.finish()
         with self._lock:
             state = self.read_state()
             if not state or state.get("token") != self.token:
@@ -425,6 +454,8 @@ def build_world(cfg):
         world = SharedWorld(cfg.shared_dir, cfg.server_dir, cfg.host_name)
         where = cfg.shared_dir
     world.skip_checks = cfg.shared_skip_checks
+    if cfg.state_dir:
+        world.progress = Progress(os.path.join(cfg.state_dir, "progress.json"))
     return world, where
 
 
@@ -581,8 +612,12 @@ class RcloneWorld(SharedWorld):
             folders = {e["Name"] for e in self.rclone.lsjson(data) if e.get("IsDir")}
             for d in SYNC_DIRS:
                 if d in folders:
-                    self.rclone.sync(self._p("data", d), os.path.join(self.server_dir, d), excludes=sorted(SKIP_NAMES))
-            self.rclone.copy_files(data, self.server_dir, SYNC_FILES)
+                    self.progress.stage(d, f"Downloading {STAGE_NAMES[d]}")
+                    self.rclone.sync(self._p("data", d), os.path.join(self.server_dir, d), excludes=sorted(SKIP_NAMES),
+                                     progress=self._progress_cb())
+            self.progress.stage("files", "Downloading the settings")
+            self.rclone.copy_files(data, self.server_dir, SYNC_FILES, progress=self._progress_cb())
+            self.progress.end_stage()
         except RcloneError as exc:
             raise HostingError(cap_message() if is_cap_error(exc) else f"Downloading the world failed: {exc}") from None
 
@@ -602,9 +637,14 @@ class RcloneWorld(SharedWorld):
             for d in SYNC_DIRS:
                 src = os.path.join(self.server_dir, d)
                 if os.path.isdir(src):
+                    self.progress.stage(d, f"Uploading {STAGE_NAMES[d]}")
                     self.rclone.sync(src, self._p("data", d), excludes=sorted(SKIP_NAMES),
-                                     backup_dir=rjoin(keep, d) if keep else None)
-            self.rclone.copy_files(self.server_dir, self._p("data"), SYNC_FILES, backup_dir=keep)
+                                     backup_dir=rjoin(keep, d) if keep else None, progress=self._progress_cb())
+            self.progress.stage("files", "Uploading the settings")
+            self.rclone.copy_files(self.server_dir, self._p("data"), SYNC_FILES, backup_dir=keep,
+                                   progress=self._progress_cb())
+            self.progress.end_stage()
+            self.progress.note("Checking that everything arrived...", 1.0)
         except RcloneError as exc:
             raise HostingError(cap_message() if is_cap_error(exc) else
                                f"Uploading the world failed: {exc}. Nothing was marked as uploaded; it will be "

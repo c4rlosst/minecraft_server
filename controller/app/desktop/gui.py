@@ -22,11 +22,13 @@ from tkinter import filedialog, messagebox
 from PIL import Image, ImageTk
 
 from .. import identity
+from .. import progress as progress_file
 from .. import sessions as sessions_log
 from ..rclone import Rclone
 from ..shared import STALE_SECONDS, RcloneWorld, is_cap_error
 from ..sharedtool import _ago as ago
 from . import invite as invites
+from . import feedback
 from . import pixel
 from . import restore as restoring
 from .home import APP_NAME, EULA_URL, KEEP, REMOTE, REMOVE, Home, find_tools
@@ -126,6 +128,7 @@ class Button:
         Button._count += 1
         self.tag = f"button{Button._count}"
         self.scene, self.command, self.enabled, self.hover = scene, command, True, False
+        self.blocked, self.pressed = None, False          # blocked: what to say when a greyed-out button is clicked
         normal, hover = ("green", "green_hover") if primary else ("normal", "hover")
         self.photos = {s: scene.photo(pixel.button(w, h, state)) for s, state in
                        (("normal", normal), ("hover", hover), ("disabled", "disabled"))}
@@ -135,11 +138,39 @@ class Button:
                                 tags=(self.tag,))
         c.tag_bind(self.tag, "<Enter>", lambda _e: self._hover(True))
         c.tag_bind(self.tag, "<Leave>", lambda _e: self._hover(False))
-        c.tag_bind(self.tag, "<Button-1>", lambda _e: self.enabled and self.command())
+        c.tag_bind(self.tag, "<ButtonPress-1>", self._press)
+        c.tag_bind(self.tag, "<ButtonRelease-1>", self._release)
+
+    def _press(self, _event):
+        if not self.pressed and (self.enabled or self.blocked):
+            self.pressed = True
+            for item in self.label.ids:                   # the label dips like a pressed stone button
+                self.scene.canvas.move(item, 0, 2)
+
+    def _unpress(self):
+        if self.pressed:
+            self.pressed = False
+            for item in self.label.ids:
+                self.scene.canvas.move(item, 0, -2)
+
+    def _release(self, _event):
+        was_pressed = self.pressed
+        self._unpress()
+        if not was_pressed or not self.hover:             # let go somewhere else: nothing happens
+            return
+        if self.enabled:
+            self.command()
+        elif self.blocked:
+            self.blocked()                                # a greyed-out button says why instead of doing nothing
+
+    def set_label(self, text):
+        self.label.set(text)
 
     def _hover(self, on):
         self.hover = on
-        self.scene.canvas.config(cursor="hand2" if on and self.enabled else "")
+        if not on:
+            self._unpress()
+        self.scene.canvas.config(cursor="hand2" if on and (self.enabled or self.blocked) else "")
         self._paint()
 
     def _paint(self):
@@ -205,6 +236,8 @@ class App:
         self.quitting, self.log_started = False, False
         self.tray, self.scene, self.avatars = None, None, {}
         self.tick_job, self.ident_stamp, self.identity_at = None, None, 0.0
+        self.progress_job, self.refreshing, self.takeover = None, False, False
+        self.progress_path = os.path.join(home.state_dir, "progress.json")
         root.title(APP_NAME)
         root.geometry(f"{W}x{H}")
         root.resizable(False, False)
@@ -461,19 +494,21 @@ class App:
             text_w = tk.font.Font(font=s.font(12)).measure(address)
             left = (W - (text_w + 14 + 76)) // 2
             s.text(left, y + 14, address, 12, "#ffffff", "#2a2a2a", anchor="w")
-            Button(s, left + text_w + 14, y, 76, 26, "Copy", lambda: self.copy(address), size=10)
+            self.copy_btn = Button(s, left + text_w + 14, y, 76, 26, "Copy", lambda: self.copy_address(address), size=10)
 
         s.text(20 + 200, py + 1, "SHARED WORLD", 10, "#f0dcbe", "#3b2410", anchor="center")
         self.shared_txt = s.text(40, py + 30, "Looking...", 12, "#ffffff", "#3b2410", width=360)
         self.light = s.canvas.create_rectangle(40, py + 150, 52, py + 162, fill="#7f7f7f", outline="#000000", width=2)
         self.light_txt = s.text(60, py + 147, "", 10, "#ffffff", "#3b2410")
-        Button(s, 20 + 400 - 108, py + 180 - 44, 92, 28, "Refresh", lambda: self.refresh_shared(full=True), size=10)
+        self.refresh_btn = Button(s, 20 + 400 - 108, py + 180 - 44, 92, 28, "Refresh",
+                                  lambda: self.refresh_shared(full=True, manual=True), size=10)
+        self.checked_txt = s.text(40, py + 164, "", 9, "#d8c8a8", "#3b2410")
 
         s.text(460, py + 16, f"This PC ({settings.get('HOST_NAME', '')})", 11, pixel.LABEL)
         self.local_txt = s.text(460, py + 42, "", 12, "#202020", width=360)
-        self.slot_imgs = []
+        self.slot_imgs, self.slot_bgs = [], []
         for i in range(SLOTS):
-            s.image(pixel.slot(36), 460 + i * 36, py + 122)
+            self.slot_bgs.append(s.image(pixel.slot(36), 460 + i * 36, py + 122))
             self.slot_imgs.append(s.canvas.create_image(460 + i * 36 + 4, py + 126, anchor="nw", state="hidden"))
         self.players_txt = s.text(460, py + 102, "", 10, pixel.LABEL)
 
@@ -482,17 +517,67 @@ class App:
         labels = (("Start hosting", self.start_hosting, True), ("Stop hosting", self.stop_hosting, False),
                   ("Web panel", self.open_panel, False), ("Server info", self.server_dialog, False),
                   ("Invite friend", self.invite_dialog, False),
-                  ("Open folder", lambda: os.startfile(self.home.root), False))
+                  ("Open folder", self.open_folder, False))
         buttons = [Button(s, 20 + i * (bw + gap), by, bw, 40, label, command, size=10, primary=primary)
                    for i, (label, command, primary) in enumerate(labels)]
         self.host_btn, self.stop_btn, self.panel_btn = buttons[0], buttons[1], buttons[2]
+        self.host_btn.blocked = lambda: self.say(self.why("start"), "warn")      # a greyed-out button explains itself
+        self.stop_btn.blocked = lambda: self.say(self.why("stop"), "warn")
+        self.panel_btn.blocked = lambda: self.say(self.why("panel"), "warn")
 
         self.log_box = s.field(tk.Text(s.canvas, wrap="word", padx=8, pady=6, state="disabled", **s.entry_style(10)),
                                36, log_y + 16, W - 72, H - log_y - 46)
         size = log_size(self.home.log_path)
         self.log_pos, self.log_started = max(0, size - 6000), False
+        self.bar = feedback.ExpBar(s, 460, py + 136, 360)          # the experience bar for loading / saving
+        self.toast = feedback.Toast(s, W // 2, 68, w=460, h=44)              # the short message after a click (over the title area:
+        #                                                         a canvas item can't sit on top of the log's text box)
         self.refresh_shared(full=True)
         self.tick()
+        if self.progress_job is not None:
+            self.root.after_cancel(self.progress_job)
+        self.progress_job = self.root.after(250, self.progress_tick)
+
+    # -- feedback: the bar, the toast, and what a click says back -----------------------------------------
+    def say(self, text, kind="info"):
+        if self.scene is not None and hasattr(self, "toast"):
+            self.toast.show(text, kind)
+
+    def why(self, button):
+        return feedback.blocked_reason(button, self.hosting(), self.listening, self.busy, self.controller.running())
+
+    def progress_tick(self):
+        """Four times a second: what is the controller doing right now, and how far along is it?"""
+        self.progress_job = None
+        try:
+            if self.scene is None or not hasattr(self, "bar"):
+                return
+            job = progress_file.read(self.progress_path)
+            getting_ready = self.controller.running() and not self.listening
+            if job:
+                self.bar.show(*feedback.bar_text(job))
+            elif getting_ready or self.busy:
+                self.bar.show((self.busy or "Starting up...").split("...")[0].strip() + "...", None, "")
+            else:
+                self.bar.hide()
+            shown = "hidden" if self.bar.visible else "normal"
+            for item in self.slot_bgs:
+                self.scene.canvas.itemconfig(item, state=shown)
+            if self.bar.visible:
+                self.players_txt.set("")
+        except tk.TclError:
+            return                                       # the window is being rebuilt or closed
+        self.progress_job = self.root.after(250, self.progress_tick)
+
+    def copy_address(self, address):
+        self.copy(address)
+        self.copy_btn.set_label("Copied!")
+        self.root.after(1500, lambda: self.copy_btn.set_label("Copy") if self.scene is not None else None)
+        self.say(f"Copied {address}. In Minecraft: Multiplayer > Add Server > paste it.", "ok")
+
+    def open_folder(self):
+        os.startfile(self.home.root)
+        self.say("Opened the SMP Host folder (backups, the server, the log).", "info")
 
     def avatar(self, name):
         if name not in self.avatars:
@@ -503,9 +588,17 @@ class App:
     def hosting(self) -> bool:
         return self.controller.running() or self.listening
 
-    def refresh_shared(self, full=False):
+    def refresh_shared(self, full=False, manual=False):
         """Look at the shared world. Every look is a billable request on a free cloud plan, so automatic looks are rare;
-        the Refresh button (full) also checks for a newer server name/picture."""
+        the Refresh button (manual) also checks for a newer server name/picture, and says what it found."""
+        if manual:
+            if self.refreshing:
+                return
+            self.refreshing = True
+            self.refresh_btn.set_label("Checking...")
+            self.refresh_btn.set_enabled(False)
+            self.say("Checking the shared world...", "info")
+        before = self.shared_state
         self.shared_at = time.time()
         check_face = (full or self.shared_at - self.identity_at > IDENTITY_EVERY) and not self.hosting()
         if check_face:
@@ -525,6 +618,20 @@ class App:
             self.shared_state, self.shared_error = state, (str(error) if error else "")
             if error and is_cap_error(error):
                 self.shared_at = time.time() + CAP_PAUSE - SHARED_EVERY     # wait longer before the next automatic look
+            if self.scene is not None and hasattr(self, "checked_txt"):
+                try:
+                    self.checked_txt.set("Checked " + time.strftime("%I:%M %p").lstrip("0"))
+                except tk.TclError:
+                    pass
+            if manual:
+                self.refreshing = False
+                try:
+                    self.refresh_btn.set_label("Refresh")
+                    self.refresh_btn.set_enabled(True)
+                    kind, text = feedback.describe_refresh(before, state, error, self.home.settings().get("HOST_NAME", ""))
+                    self.say(text, kind)
+                except tk.TclError:
+                    pass                                 # the window was rebuilt while it looked
             self.render()
         self.in_background(work, done)
 
@@ -725,6 +832,7 @@ class App:
             self.job.add(proc)
         except Exception as exc:
             return messagebox.showerror(APP_NAME, f"Couldn't start: {exc}")
+        self.say("Starting: taking the hosting lock, then getting the latest world. Watch the bar.", "info")
         self.render()
 
     def stop_hosting(self, then=None):
@@ -742,6 +850,7 @@ class App:
                     then()
             return
         self.busy = "Saving, uploading the world and handing over... Keep the PC on until this says Done."
+        self.say("Stopping: saving the world and uploading it. Keep the PC on until it says Done.", "info")
 
         def done(result, error):
             if isinstance(error, TimeoutError):                  # a very slow upload: it is still working, just wait

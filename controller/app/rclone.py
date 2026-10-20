@@ -7,6 +7,7 @@ import json
 import logging
 import shutil
 import subprocess
+import threading
 
 log = logging.getLogger("rclone")
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -49,6 +50,43 @@ class Rclone:
             raise RcloneError(" | ".join(lines[-3:]) or f"rclone {args[0]} failed", done.returncode)
         return done
 
+    def _stream(self, *args: str, on_stats, timeout: int = 3600):
+        """Run rclone and hand its progress numbers ({'bytes', 'totalBytes', 'transfers', ...}, about twice a second) to
+        on_stats while it works. Raises RcloneError like _call when it fails."""
+        if not self.path:
+            raise RcloneError("rclone is not installed (try: winget install Rclone.Rclone)")
+        cmd = [self.path, *args, "--use-json-log", "--stats", "500ms", "--stats-log-level", "NOTICE"]
+        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, creationflags=NO_WINDOW)
+        timer = threading.Timer(timeout, proc.kill)
+        timer.start()
+        problems = []
+        try:
+            for raw in proc.stderr:
+                try:
+                    entry = json.loads(raw)
+                except ValueError:
+                    continue
+                if isinstance(entry.get("stats"), dict):
+                    try:
+                        on_stats(entry["stats"])
+                    except Exception:
+                        log.debug("progress callback failed", exc_info=True)
+                elif entry.get("level") in ("error", "critical", "fatal") and entry.get("msg"):
+                    problems.append(str(entry["msg"]))
+            code = proc.wait()
+        finally:
+            timer.cancel()
+            if proc.poll() is None:
+                proc.kill()
+        if code != 0:
+            raise RcloneError(" | ".join(problems[-3:]) or f"rclone {args[0]} failed", code)
+
+    def _run(self, *args: str, progress=None, timeout: int = 3600):
+        if progress is None:
+            self._call(*args, timeout=timeout)
+        else:
+            self._stream(*args, on_stats=progress, timeout=timeout)
+
     # -- small files (the lock) -----------------------------------------------------------------------
     def cat(self, remote_path: str) -> bytes | None:
         """The file's contents, or None if it doesn't exist. Some storage (Backblaze B2) answers a missing file with
@@ -74,14 +112,15 @@ class Rclone:
         done = self._call(*args, timeout=600, ok=(0, *NOT_FOUND))
         return json.loads(done.stdout or b"[]") if done.returncode == 0 else []
 
-    def sync(self, src: str, dst: str, excludes=(), backup_dir: str | None = None, transfers: int = 8) -> None:
+    def sync(self, src: str, dst: str, excludes=(), backup_dir: str | None = None, transfers: int = 8,
+             progress=None) -> None:
         """Make dst identical to src. With backup_dir, files that get replaced or deleted are kept there."""
         args = ["sync", src, dst, "--transfers", str(transfers), "--checkers", "16", "--fast-list"]
         for pattern in excludes:
             args += ["--exclude", pattern]
         if backup_dir:
             args += ["--backup-dir", backup_dir]
-        self._call(*args)
+        self._run(*args, progress=progress)
 
     def copy(self, src: str, dst: str, excludes=(), transfers: int = 8) -> None:
         """Copy everything from src into dst (between two different storages too). Never deletes anything."""
@@ -90,14 +129,14 @@ class Rclone:
             args += ["--exclude", pattern]
         self._call(*args, timeout=4 * 3600)
 
-    def copy_files(self, src: str, dst: str, names, backup_dir: str | None = None) -> None:
+    def copy_files(self, src: str, dst: str, names, backup_dir: str | None = None, progress=None) -> None:
         """Copy only these files from the top level of src (the ones that exist), never deleting anything."""
         args = ["copy", src, dst, "--max-depth", "1"]
         for name in names:
             args += ["--include", "/" + name]
         if backup_dir:
             args += ["--backup-dir", backup_dir]
-        self._call(*args)
+        self._run(*args, progress=progress)
 
     def purge(self, remote_path: str) -> None:
         """Delete a folder and everything in it (a missing folder is fine)."""
