@@ -17,6 +17,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from . import identity
+from . import sessions as session_log
 from .rclone import RcloneError, join as rjoin
 
 log = logging.getLogger("shared")
@@ -28,6 +29,7 @@ BEAT_SECONDS = 120             # between heartbeats; every cloud request counts 
 VERIFY_EVERY = 10              # heartbeats between real reads of the lock (see SharedWorld.heartbeat)
 LATE_BEAT_SECONDS = 250        # a heartbeat later than this means the PC stalled or slept: read the lock first
 PULL_MARKER = ".pull-incomplete"
+RESTORE_MARKER = ".restored-world"   # a world put back from a backup on purpose: its next upload skips the checks
 SKIP_NAMES = {"session.lock", "desktop.ini"}   # desktop.ini: Google Drive adds one to every folder it syncs
 STALE_SECONDS = 300
 
@@ -234,6 +236,37 @@ class SharedWorld:
     def _remember(self, state: dict) -> None:
         self._cache, self._last_write = dict(state), self.clock()
 
+    # -- the log of who hosted when (sessions.py)
+    def _read_sessions(self) -> list:
+        try:
+            with open(os.path.join(self.shared_dir, "sessions.json")) as f:
+                data = json.load(f)
+            return data if isinstance(data, list) else []
+        except (OSError, ValueError):
+            return []
+
+    def _write_sessions(self, sessions: list) -> None:
+        path = os.path.join(self.shared_dir, "sessions.json")
+        with open(path + ".tmp", "w") as f:
+            json.dump(sessions, f)
+        os.replace(path + ".tmp", path)
+
+    def sessions(self) -> list:
+        """Who hosted and when, newest first."""
+        return list(reversed(self._read_sessions()))
+
+    def _log_start(self, previous: dict) -> None:
+        try:
+            self._write_sessions(session_log.begin(self._read_sessions(), self.host, self.token, self.clock(), previous))
+        except Exception as exc:                # a log is never worth stopping a host over
+            log.warning("Couldn't record this hosting session (%s)", exc)
+
+    def _log_end(self, version) -> None:
+        try:
+            self._write_sessions(session_log.finish(self._read_sessions(), self.token, self.clock(), version))
+        except Exception as exc:
+            log.warning("Couldn't record the end of this hosting session (%s)", exc)
+
     def _write_state(self, state: dict) -> None:
         tmp = self.state_path + ".tmp"
         with open(tmp, "w") as f:
@@ -289,6 +322,7 @@ class SharedWorld:
             raise HostingError("Someone else took the lock at the same moment (or the shared storage made a conflict "
                                "copy of state.json). Ask who is hosting, delete any 'state (...)' files, and try again.")
         self.token = token
+        self._log_start(state)
         return state
 
     def heartbeat(self) -> None:
@@ -315,6 +349,7 @@ class SharedWorld:
             if state and state.get("token") == self.token:
                 self._write_state(dict(state, status="idle", host=None, token=None, since=None,
                                        lastHost=self.host, lastSeen=self.clock()))
+                self._log_end(state.get("version"))
             self.token = None
 
     # -- moving the world
@@ -330,6 +365,10 @@ class SharedWorld:
     def pull(self) -> None:
         """shared -> this PC (server must be stopped)."""
         os.makedirs(self.server_dir, exist_ok=True)
+        try:
+            os.remove(os.path.join(self.server_dir, RESTORE_MARKER))     # a download replaces whatever was restored
+        except OSError:
+            pass
         with open(self._pull_marker, "w") as f:
             f.write("A download from the shared folder started and has not finished.\n")
         self._pull_data()
@@ -338,7 +377,7 @@ class SharedWorld:
     def check_before_upload(self) -> None:
         """Refuse to replace the shared world with one that looks incomplete or wrong (e.g. a half-finished download,
         a brand new default world). The shared copy is left untouched."""
-        if self.skip_checks:
+        if self.skip_checks or os.path.exists(os.path.join(self.server_dir, RESTORE_MARKER)):
             return
         problem = upload_problem(world_facts(self._shared_world_paths()),
                                  world_facts(local_world_paths(os.path.join(self.server_dir, "world"))))
@@ -361,6 +400,10 @@ class SharedWorld:
             state.pop("pushingBy", None)
             state.update(version=int(state.get("version", 0)) + 1, count=count, bytes=nbytes, lastPush=self.clock())
             self._write_state(state)
+        try:
+            os.remove(os.path.join(self.server_dir, RESTORE_MARKER))     # the restored world is the shared one now
+        except OSError:
+            pass
         return count, nbytes
 
 
@@ -426,6 +469,23 @@ class RcloneWorld(SharedWorld):
         except RcloneError as exc:
             raise self._unreachable("Can't write to the shared storage", exc) from None
         self._remember(state)
+
+    def _read_sessions(self) -> list:
+        try:
+            raw = self.rclone.cat(self._p("sessions.json"))
+        except RcloneError as exc:
+            raise self._unreachable("Can't reach the shared storage", exc) from None
+        try:
+            data = json.loads(raw.decode("utf-8")) if raw else []
+        except ValueError:
+            return []
+        return data if isinstance(data, list) else []
+
+    def _write_sessions(self, sessions: list) -> None:
+        try:
+            self.rclone.put(self._p("sessions.json"), json.dumps(sessions).encode("utf-8"))
+        except RcloneError as exc:
+            raise self._unreachable("Can't write to the shared storage", exc) from None
 
     # -- the server's name, description and picture
     def read_identity(self):

@@ -22,11 +22,13 @@ from tkinter import filedialog, messagebox
 from PIL import Image, ImageTk
 
 from .. import identity
+from .. import sessions as sessions_log
 from ..rclone import Rclone
 from ..shared import STALE_SECONDS, RcloneWorld, is_cap_error
 from ..sharedtool import _ago as ago
 from . import invite as invites
 from . import pixel
+from . import restore as restoring
 from .home import APP_NAME, EULA_URL, KEEP, REMOTE, REMOVE, Home, find_tools
 from .icon import make_icon
 from .runner import Controller, Panel, last_error, log_size
@@ -255,6 +257,96 @@ class App:
         self.root.clipboard_append(text)
 
     # -- first start: the invite --------------------------------------------------------------------
+    def history_dialog(self):
+        """Who hosted and when, the backups on this PC (matched to those sessions), and putting a backup back."""
+        win = tk.Toplevel(self.root)
+        win.title("Hosting history and backups")
+        win.transient(self.root)
+        win.resizable(False, False)
+        dw, dh = 760, 640
+        s = Scene(win, self.family, dw, dh)
+        s.image(pixel.panel(dw, dh), 0, 0)
+        s.text(24, 16, "Who hosted, and backups", 14, "#202020", bold=True)
+        s.text(24, 46, "Hosting history (newest first): who, from when to when, and how it ended.", 10, pixel.LABEL, width=dw - 48)
+        box = {k: v for k, v in s.entry_style(10).items() if k != "insertbackground"}      # (a list has no text cursor)
+        who = s.field(tk.Listbox(s.canvas, activestyle="none", exportselection=False, **box), 24, 70, dw - 48, 190)
+        who.insert("end", "Loading...")
+        s.text(24, 276, "Backups on this PC (made when the server stops, and before this PC's world is replaced).", 10,
+               pixel.LABEL, width=dw - 48)
+        pick = s.field(tk.Listbox(s.canvas, activestyle="none", exportselection=False, **box), 24, 300, dw - 48, 190)
+        note = s.text(24, 502, "Pick the backup that was made AFTER the session you want back (a backup holds the world as "
+                               "it was when it was made).", 10, pixel.LABEL, width=dw - 48)
+        data = {"sessions": [], "backups": restoring.list_backups(self.home.backup_dir)}
+
+        def show_backups():
+            pick.delete(0, "end")
+            for b in data["backups"]:
+                during = sessions_log.session_at(data["sessions"], b["time"])
+                label = f"{sessions_log._day(b['time'])}, {sessions_log._clock(b['time'])}   {b['size'] / 1048576:.0f} MB"
+                if during:
+                    host = during.get("host", "?")
+                    if b["time"] - float(during["start"]) < 300:
+                        label += f"   (as {host}'s session started: the world BEFORE it)"
+                    elif during.get("end") is not None and float(during["end"]) - b["time"] < 300:
+                        label += f"   (as {host}'s session ended: includes it)"
+                    else:
+                        label += f"   (during {host}'s session)"
+                pick.insert("end", label)
+            if not data["backups"]:
+                pick.insert("end", "No backups on this PC yet.")
+
+        def loaded(result, error):
+            who.delete(0, "end")
+            if error:
+                who.insert("end", f"Can't read the history: {error}")
+                return
+            data["sessions"] = list(reversed(result))
+            now = time.time()
+            for entry in result:
+                who.insert("end", sessions_log.line(entry, now))
+            if not result:
+                who.insert("end", "Nothing recorded yet. From now on every session is written here.")
+            show_backups()
+        show_backups()
+        self.in_background(lambda: self.world().sessions(), loaded)
+
+        def restore_selected():
+            chosen = pick.curselection()
+            if not chosen or not data["backups"]:
+                return note.set("Click a backup in the second list first.", "#aa0000")
+            win.destroy()
+            self.restore_zip(data["backups"][chosen[0]]["path"])
+
+        def restore_other():
+            path = filedialog.askopenfilename(parent=win, title="Pick a world backup (zip)", filetypes=[("World backup (zip)", "*.zip")])
+            if path:
+                win.destroy()
+                self.restore_zip(path)
+        Button(s, 24, 548, 250, 38, "Restore selected backup", restore_selected, primary=True)
+        Button(s, 290, 548, 220, 38, "Pick another file...", restore_other)
+        Button(s, dw - 24 - 120, 548, 120, 38, "Close", win.destroy)
+
+    def restore_zip(self, path):
+        """Put a backup (a world-....zip) back as THE world: for a session that was never uploaded."""
+        if self.hosting():
+            return messagebox.showinfo(APP_NAME, "Stop hosting first, then restore a backup.")
+        if not messagebox.askyesno(APP_NAME, f"Use this backup as the world?\n\n{os.path.basename(path)}\n\nThis PC's "
+                                             "current world is kept in a folder next to it, nothing is deleted. Then "
+                                             "press Start hosting and Stop hosting: that uploads the backup as the "
+                                             "shared world for everyone (what the shared world had is kept in the "
+                                             "history for a few days).", icon="warning"):
+            return
+        self.busy = "Restoring the backup..."
+
+        def done(_result, error):
+            self.busy = ""
+            if error:
+                return messagebox.showerror(APP_NAME, str(error))
+            messagebox.showinfo(APP_NAME, "Restored. Now press Start hosting (it keeps this world), then Stop hosting "
+                                          "and wait for Done: that uploads it for everyone.")
+            self.refresh_shared(full=True)
+        self.in_background(lambda: restoring.restore(self.home, Rclone(self.tools.rclone or "rclone"), path), done)
+
     def new_invite(self):
         """Set up again from a new invite (the server moved to other storage, or a key was replaced)."""
         if self.hosting():
@@ -359,6 +451,7 @@ class App:
 
         Button(s, W - 20 - 130, 22, 130, 28, "Hide to tray", self.hide_to_tray, size=10)
         Button(s, W - 20 - 130, 56, 130, 28, "New invite", self.new_invite, size=10)   # under it: the picture is top left
+        Button(s, W - 20 - 130, 90, 130, 28, "History", self.history_dialog, size=10)
 
         y = top + 6                                      # under the title: description, then the address to share
         if face["description"]:
@@ -577,6 +670,16 @@ class App:
                 and time.time() - float(s.get("lastSeen", 0)) < STALE_SECONDS:
             return messagebox.showinfo(APP_NAME, f"{s.get('host')} is hosting right now. Join their server, or ask "
                                                  "them to stop hosting first.")
+        self.takeover = False
+        if s.get("status") == "hosting" and s.get("host") != me:      # not alive (checked above): its PC may be gone
+            minutes = int((time.time() - float(s.get("lastSeen", 0))) // 60)
+            if not messagebox.askyesno(APP_NAME, f"{s.get('host')} was hosting but hasn't checked in for {minutes} "
+                                                 "min (the PC may have crashed or lost power, or it is still uploading)."
+                                                 "\n\nAsk them first: their last session may only be on their PC, and "
+                                                 "taking over means starting from the last upload.\n\nTake over "
+                                                 "hosting anyway?", icon="warning"):
+                return
+            self.takeover = True
         if self.listening and not self.controller.running():     # (the last background check, so no pause here)
             return messagebox.showwarning(APP_NAME, "Something is already using this PC's server port (the old "
                                                     "Start SMP window?). Close it first.")
@@ -617,7 +720,8 @@ class App:
         self.busy, self.expect_exit = "", False
         self.log_start = log_size(self.home.log_path)
         try:
-            proc = self.controller.start()
+            proc = self.controller.start(takeover=getattr(self, "takeover", False))
+            self.takeover = False
             self.job.add(proc)
         except Exception as exc:
             return messagebox.showerror(APP_NAME, f"Couldn't start: {exc}")

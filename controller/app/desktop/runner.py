@@ -95,12 +95,16 @@ class Controller:
         self.home, self.tools, self.popen = home, tools, popen
         self.proc = None
 
-    def start(self):
+    def start(self, takeover: bool = False):
+        """takeover: take the lock from a host that stopped checking in (what it never uploaded is lost)."""
         os.makedirs(self.home.state_dir, exist_ok=True)
         cmd, cwd = controller_command()
+        env = self.home.controller_env(self.tools)
+        if takeover:
+            env["TAKEOVER"] = "1"
         console = open(os.path.join(self.home.state_dir, "controller-console.log"), "ab")
         try:
-            self.proc = self.popen(cmd, cwd=cwd, env=self.home.controller_env(self.tools), stdin=subprocess.DEVNULL,
+            self.proc = self.popen(cmd, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
                                    stdout=console, stderr=subprocess.STDOUT, creationflags=NO_WINDOW)
         finally:
             console.close()                      # the child has its own handle now
