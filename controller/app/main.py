@@ -173,6 +173,7 @@ def cleanup(app: App):
             log.exception("could not stop playit")
     if not shared or not shared.token:
         return
+    uploaded = True
     try:
         changed = bool(app.hosting and app.hosting.dirty)
         if runtime.state(cfg.mc_container) == "running":
@@ -187,10 +188,13 @@ def cleanup(app: App):
             shared.push()
             print("Uploaded. Let Google Drive finish syncing before you turn off the PC.")
     except Exception:
-        log.exception("Could not upload the world while shutting down. The lock is released anyway; "
-                      "the next host will get the last successful upload.")
+        uploaded = False
+        log.exception("Could not upload the world while shutting down. The lock is KEPT, so nobody starts from the old "
+                      "copy: start hosting again on this PC (it resumes with its own, newer world), then stop hosting "
+                      "once the storage works.")
     finally:
-        shared.release()
+        if uploaded:                             # releasing it after a failed upload would hand the next host an old world
+            shared.release()
 
 
 def run():
