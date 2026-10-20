@@ -94,6 +94,30 @@ class RestoreTests(unittest.TestCase):
             restore.restore(self.home, self.rclone, self.zip, report=self.said.append)
         self.assertEqual(read(os.path.join(self.home.server_dir, "world", "level.dat")), "current")
 
+    def test_a_zip_of_the_world_folder_is_accepted_and_session_lock_is_left_out(self):
+        drive = os.path.join(self.tmp.name, "world-20261020T164727Z-1-001.zip")      # what a Google Drive download looks like
+        with zipfile.ZipFile(drive, "w") as z:
+            z.writestr("world/level.dat", "drive-level")
+            z.writestr("world/playerdata/p0.dat", "drive-0")
+            z.writestr("world/dimensions/minecraft/the_nether/region/r.0.0.mca", "nether")
+            z.writestr("world/session.lock", "x")
+        restore.restore(self.home, self.rclone, drive, report=self.said.append)
+        world = os.path.join(self.home.server_dir, "world")
+        self.assertEqual(read(os.path.join(world, "level.dat")), "drive-level")
+        self.assertEqual(read(os.path.join(world, "dimensions", "minecraft", "the_nether", "region", "r.0.0.mca")), "nether")
+        self.assertFalse(os.path.exists(os.path.join(world, "session.lock")))
+        self.assertFalse(os.path.exists(os.path.join(world, "world")))                 # not a world inside the world
+
+    def test_a_zip_trying_to_write_outside_the_world_is_refused(self):
+        evil = os.path.join(self.tmp.name, "evil.zip")
+        with zipfile.ZipFile(evil, "w") as z:
+            z.writestr("level.dat", "x")
+            z.writestr("../escaped.txt", "x")
+        with self.assertRaises(restore.RestoreError):
+            restore.restore(self.home, self.rclone, evil, report=self.said.append)
+        self.assertEqual(read(os.path.join(self.home.server_dir, "world", "level.dat")), "current")     # put back
+        self.assertFalse(os.path.exists(os.path.join(self.home.server_dir, "escaped.txt")))
+
     def test_backups_are_listed_newest_first_with_the_time_from_their_names(self):
         folder = os.path.join(self.tmp.name, "backups")
         for name in ("world-2026-10-20_18-50-12.zip", "world-2026-10-20_23-30-00.zip", "world-2026-10-19_08-00-00.zip",

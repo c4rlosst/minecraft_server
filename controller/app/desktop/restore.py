@@ -50,13 +50,44 @@ def list_backups(backup_dir: str) -> list:
     return sorted(found, key=lambda b: b["time"], reverse=True)
 
 
+def world_prefix(names) -> str:
+    """'' when level.dat is at the top of the zip (the app's own backups), 'world/' when the world is inside a folder of
+    that name (a zip made from the world folder, e.g. a Google Drive download); None when it isn't a world."""
+    if "level.dat" in names:
+        return ""
+    if "world/level.dat" in names:
+        return "world/"
+    return None
+
+
+def extract_world(zip_path: str, target: str) -> int:
+    """Unpack the world into target (the world folder itself). Returns the number of files. session.lock is left out."""
+    count = 0
+    with zipfile.ZipFile(zip_path) as z:
+        prefix = world_prefix(z.namelist())
+        root = os.path.realpath(target)
+        for info in z.infolist():
+            if info.is_dir() or not info.filename.startswith(prefix):
+                continue
+            rel = info.filename[len(prefix):]
+            if os.path.basename(rel) == "session.lock":
+                continue
+            dest = os.path.realpath(os.path.join(target, *rel.split("/")))
+            if os.path.commonpath([root, dest]) != root:
+                raise RestoreError("The zip holds a file outside the world folder; refusing it.")
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            with z.open(info) as src, open(dest, "wb") as out:
+                shutil.copyfileobj(src, out)
+            count += 1
+    return count
+
+
 def check_zip(path: str) -> None:
     try:
         with zipfile.ZipFile(path) as z:
-            names = z.namelist()
-            if "level.dat" not in names:
-                raise RestoreError("That zip isn't a world backup (it has no level.dat at the top). Use one of the "
-                                   "world-....zip files from the SMP Host backups folder.")
+            if world_prefix(z.namelist()) is None:
+                raise RestoreError("That zip isn't a world backup (no level.dat at the top, or inside a folder called "
+                                   "world). Use one of the world-....zip files from the SMP Host backups folder.")
             bad = z.testzip()
             if bad:
                 raise RestoreError(f"The zip is damaged ({bad}). Try another backup.")
@@ -97,8 +128,7 @@ def restore(home: Home, rclone: Rclone, zip_path: str, report=print, force=False
         report(f"This PC's current world was moved to: {moved}")
     try:
         os.makedirs(target)
-        with zipfile.ZipFile(zip_path) as z:
-            z.extractall(target)
+        extract_world(zip_path, target)
         pull_marker = os.path.join(home.server_dir, ".pull-incomplete")
         if os.path.exists(pull_marker):                     # a restored world is complete: don't let it be re-downloaded
             os.remove(pull_marker)

@@ -4,6 +4,7 @@ import logging
 
 from . import shared as shared_module
 from .manager import PlayersOnline, StartingUp
+from .progress import NullProgress
 
 log = logging.getLogger("hosting")
 
@@ -23,6 +24,9 @@ class Hosting:
                 await asyncio.to_thread(self.shared.heartbeat)
             except Exception:
                 log.exception("heartbeat failed")
+
+    def _progress(self):
+        return getattr(self.shared, "progress", None) or NullProgress()
 
     def mark_started(self):
         self.dirty = True
@@ -51,6 +55,7 @@ class Hosting:
             self._handing_over = False
 
     async def _hand_over(self, m) -> str:
+        self._progress().note("Saving the world and stopping the server...")
         if m.state in ("online", "starting"):
             try:
                 await m.stop()
@@ -65,7 +70,9 @@ class Hosting:
             raise shared_module.HostingError("The server didn't stop in time; try again in a minute.")
         if self.dirty:                          # nothing uploaded yet this session (e.g. after a manual stop)
             await self.push_after_stop()
+        self._progress().note("Handing over to the next host...")
         await asyncio.to_thread(self.shared.release)
+        self._progress().finish()
         log.info("Handed over hosting; the controller will now quit.")
         asyncio.get_running_loop().call_later(1.5, self.exit_event.set)   # let the HTTP/Discord reply go out first
         return "handed over"
