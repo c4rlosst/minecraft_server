@@ -54,6 +54,34 @@ The app works with either; an invite says which one.
 the code privately. They install the new SMP Host, click **New invite** (top left), paste the code and **Set up**. Their
 name for this PC and their own settings stay.
 
+## If a PC crashes (what protects the world)
+
+- **Checkpoints.** While the server runs and people are playing, the app saves the world to the shared storage every
+  20 minutes (it briefly pauses the server's own saving for a few seconds, copies what changed, turns saving back on, then
+  uploads slowly, 2 MB/s, so the players' connection isn't used up). If the PC dies, the next host loses at most the last
+  20 minutes. Change it with `CHECKPOINT_MINUTES` (0 = off) and `CHECKPOINT_BWLIMIT` in the PC's `settings.env`.
+- **Content, not timestamps.** Uploads and downloads compare the files' contents. Windows can leave a world file's modified
+  time unchanged after Minecraft rewrote it, and a size-and-time comparison would then skip the change silently.
+- **No overwriting newer play.** Every PC remembers which upload its world is based on. A PC whose copy is older than the
+  newest upload downloads the newest world first (its own copy is kept as a backup) and is refused if it tries to upload.
+- **Taking over.** If a host goes silent, the next person is offered **Take over hosting**, with the age of the newest
+  saved copy. **History** shows who hosted when, and **Restore selected backup** brings back an older world.
+
+## What the window tells you
+
+- **The bar** under *This PC* fills from 0 to 100 while the app starts (taking the lock, downloading the world, starting the
+  tunnel and the bot) and while it stops (saving, uploading, checking, handing over). A step with no numbers yet creeps
+  forward instead of jumping. The bar goes away at 100.
+- **The status chip** at the top right of *This PC* says Not hosting, Getting ready, Hosting, Online or Working.
+- **Errors in plain words.** If the shared storage can't be reached the *Shared World* box says why in a short sentence (the
+  free daily limit is used up, the keys were refused, no internet, ...) and the full technical text goes to the log. **Copy
+  log** copies the log so it can be sent when asking for help.
+- **Update button.** When a newer SMP Host is released a green **Update** button appears under History; it opens the download
+  page (nothing installs by itself). Set `CHECK_UPDATES=0` in `settings.env` to turn the check off.
+- **Disk space.** Hosting refuses to start with less than 2 GB free, instead of ending in a half-written world.
+- **Checked downloads.** After the world is downloaded the app compares it with the storage and fetches again anything that
+  is missing or cut short; it refuses to host a world that still doesn't match.
+
 ## Server name, description and picture
 
 Click **Server info** in the app. Change the **name**, an optional one-line **description**, and the **picture** (any PNG,

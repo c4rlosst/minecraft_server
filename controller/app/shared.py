@@ -30,6 +30,7 @@ BEAT_SECONDS = 120             # between heartbeats; every cloud request counts 
 VERIFY_EVERY = 10              # heartbeats between real reads of the lock (see SharedWorld.heartbeat)
 LATE_BEAT_SECONDS = 250        # a heartbeat later than this means the PC stalled or slept: read the lock first
 PULL_MARKER = ".pull-incomplete"
+VERSION_MARKER = ".shared-version"    # which upload this PC's world is based on (outside the synced folders)
 RESTORE_MARKER = ".restored-world"   # a world put back from a backup on purpose: its next upload skips the checks
 STAGE_NAMES = {"world": "the world", "mods": "the mods", "config": "the settings", "EasyAuth": "the player logins"}
 SKIP_NAMES = {"session.lock", "desktop.ini"}   # desktop.ini: Google Drive adds one to every folder it syncs
@@ -193,13 +194,14 @@ class SharedWorld:
     def _before_push(self) -> None:
         pass
 
-    def _push_data(self) -> tuple:
+    def _push_data(self, source: str = None, keep_history: bool = True) -> tuple:
+        source = source or self.server_dir
         for d in SYNC_DIRS:
-            src = os.path.join(self.server_dir, d)
+            src = os.path.join(source, d)
             if os.path.isdir(src):
                 mirror_dir(src, os.path.join(self.data_dir, d))
         for f in SYNC_FILES:
-            copy_file(os.path.join(self.server_dir, f), os.path.join(self.data_dir, f))
+            copy_file(os.path.join(source, f), os.path.join(self.data_dir, f))
         return manifest(self.data_dir)
 
     # -- the server's name, description and picture, shared by every host (identity.py decides who is newest)
@@ -257,6 +259,8 @@ class SharedWorld:
     def sessions(self) -> list:
         """Who hosted and when, newest first."""
         return list(reversed(self._read_sessions()))
+
+    supports_checkpoints = False                   # only the rclone storages: a synced folder can't be flushed this way
 
     def _log_start(self, previous: dict) -> None:
         try:
@@ -325,6 +329,7 @@ class SharedWorld:
             raise HostingError("Someone else took the lock at the same moment (or the shared storage made a conflict "
                                "copy of state.json). Ask who is hosting, delete any 'state (...)' files, and try again.")
         self.token = token
+        self._beats = VERIFY_EVERY - 1                  # so the FIRST heartbeat re-reads the lock: a short claim wait is safe
         self._log_start(state)
         return state
 
@@ -360,6 +365,32 @@ class SharedWorld:
     def _pull_marker(self) -> str:
         return os.path.join(self.server_dir, PULL_MARKER)     # outside the synced folders, so it never travels
 
+    # -- which version of the shared world this PC's own copy is based on
+    def local_version(self):
+        """The upload number this PC's world was last downloaded at / uploaded as, or None when not known yet."""
+        try:
+            with open(os.path.join(self.server_dir, VERSION_MARKER), encoding="utf-8") as f:
+                return int(json.load(f)["version"])
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+
+    def mark_local_version(self, version) -> None:
+        try:
+            with open(os.path.join(self.server_dir, VERSION_MARKER), "w", encoding="utf-8") as f:
+                json.dump({"version": int(version or 0), "at": self.clock(), "host": self.host}, f)
+        except OSError:
+            log.warning("Couldn't record which version this PC's world is based on")
+
+    def shared_version(self) -> int:
+        """The newest upload number as of the lock this PC last wrote or read."""
+        return int((self._cache or {}).get("version") or 0)
+
+    def local_is_behind(self) -> bool:
+        """True when somebody uploaded a newer world than the one this PC's copy is based on. Keeping this PC's copy and
+        uploading it later would silently throw that newer world away."""
+        mine = self.local_version()
+        return mine is not None and mine < self.shared_version()
+
     def can_keep_local_world(self) -> bool:
         """After resuming this PC's own lock: the local world is only the newest copy if the last download finished.
         A download that was cut off (window closed, crash) leaves a half-copied world, so it has to be fetched again."""
@@ -379,14 +410,24 @@ class SharedWorld:
             self._pull_data()
         finally:
             self.progress.finish()
-        os.remove(self._pull_marker)                           # only reached when everything was copied
+        os.remove(self._pull_marker)
+        self.mark_local_version(self.shared_version())          # this PC's world is now exactly that upload                           # only reached when everything was copied
 
-    def _stage_weights(self) -> dict:
+    def _check_not_overwriting_newer(self) -> None:
+        """Refuse an upload from a PC whose world is older than the newest upload (see local_is_behind)."""
+        mine, state = self.local_version(), self.read_state() or {}
+        newest = int(state.get("version") or 0)
+        if mine is not None and mine < newest:
+            raise HostingError(f"Not uploading: this PC's world is based on version {mine}, but the shared world is already at "
+                               f"version {newest} (someone uploaded in between). Uploading would erase their play. This PC's "
+                               "copy was left alone; ask for help before starting again (History > Restore can bring it back).")
+
+    def _stage_weights(self, base: str = None) -> dict:
         """How big each part of the transfer is (this PC's copy as the guide), so the progress bar fills in proportion."""
         weights = {}
         for d in SYNC_DIRS:
             total = 0
-            for root, _dirs, files in os.walk(os.path.join(self.server_dir, d)):
+            for root, _dirs, files in os.walk(os.path.join(base or self.server_dir, d)):
                 for name in files:
                     try:
                         total += os.path.getsize(os.path.join(root, name))
@@ -399,26 +440,37 @@ class SharedWorld:
     def _progress_cb(self):
         return None if type(self.progress) is NullProgress else self.progress.transfer
 
-    def check_before_upload(self) -> None:
+    def check_before_upload(self, source: str = None) -> None:
         """Refuse to replace the shared world with one that looks incomplete or wrong (e.g. a half-finished download,
         a brand new default world). The shared copy is left untouched."""
+        source = source or self.server_dir
         if self.skip_checks or os.path.exists(os.path.join(self.server_dir, RESTORE_MARKER)):
             return
         problem = upload_problem(world_facts(self._shared_world_paths()),
-                                 world_facts(local_world_paths(os.path.join(self.server_dir, "world"))))
+                                 world_facts(local_world_paths(os.path.join(source, "world"))))
         if problem:
             raise HostingError(f"Not uploading: {problem}. It looks incomplete or wrong, so the shared world was left "
                                "untouched. If this is really what you want, set SHARED_SKIP_CHECKS=1 in controller.env.")
 
     def push(self) -> tuple:
         """this PC -> shared (server must be stopped). Requires the lock."""
+        return self._upload(self.server_dir, "Uploading the world", keep_history=True)
+
+    def checkpoint(self, snapshot: str) -> tuple:
+        """Save the world to the shared storage WHILE the server runs, from a snapshot of it taken at a quiet moment (see
+        Hosting.checkpoint_loop). If this PC then crashes, the next host starts from this checkpoint instead of from the
+        last full upload. Replaced files are not kept in the undo history: a checkpoint replaces the one before it."""
+        return self._upload(snapshot, "Saving a checkpoint to the cloud", keep_history=False)
+
+    def _upload(self, source: str, label: str, keep_history: bool) -> tuple:
         if not self.holds_lock():
             raise HostingError("Lost the hosting lock, not uploading the world.")
-        self.check_before_upload()
-        self.progress.begin("upload", "Uploading the world", self._stage_weights())
+        self.check_before_upload(source)
+        self._check_not_overwriting_newer()
+        self.progress.begin("upload", label, self._stage_weights(source))
         try:
             self._before_push()
-            count, nbytes = self._push_data()
+            count, nbytes = self._push_data(source, keep_history)
         finally:
             self.progress.finish()
         with self._lock:
@@ -429,6 +481,7 @@ class SharedWorld:
             state.pop("pushingBy", None)
             state.update(version=int(state.get("version", 0)) + 1, count=count, bytes=nbytes, lastPush=self.clock())
             self._write_state(state)
+            self.mark_local_version(state["version"])
         try:
             os.remove(os.path.join(self.server_dir, RESTORE_MARKER))     # the restored world is the shared one now
         except OSError:
@@ -454,6 +507,8 @@ def build_world(cfg):
         world = SharedWorld(cfg.shared_dir, cfg.server_dir, cfg.host_name)
         where = cfg.shared_dir
     world.skip_checks = cfg.shared_skip_checks
+    if getattr(cfg, "checkpoint_bwlimit", ""):
+        world.checkpoint_bwlimit = cfg.checkpoint_bwlimit
     if cfg.state_dir:
         world.progress = Progress(os.path.join(cfg.state_dir, "progress.json"))
     return world, where
@@ -511,6 +566,9 @@ class RcloneWorld(SharedWorld):
         except ValueError:
             return []
         return data if isinstance(data, list) else []
+
+    supports_checkpoints = True
+    checkpoint_bwlimit = "2M"                       # MiB per second while a checkpoint uploads (CHECKPOINT_BWLIMIT)
 
     def _write_sessions(self, sessions: list) -> None:
         try:
@@ -618,8 +676,26 @@ class RcloneWorld(SharedWorld):
             self.progress.stage("files", "Downloading the settings")
             self.rclone.copy_files(data, self.server_dir, SYNC_FILES, progress=self._progress_cb())
             self.progress.end_stage()
+            self._verify_download(folders)
         except RcloneError as exc:
             raise HostingError(cap_message() if is_cap_error(exc) else f"Downloading the world failed: {exc}") from None
+
+    def _verify_download(self, folders) -> None:
+        """Every file the storage holds for a folder must now be here with the same size. A transfer that skipped or cut off
+        a file is caught here (and fetched again) instead of being hosted, and uploaded again, as if it were the whole world."""
+        def incomplete():
+            return [d for d in SYNC_DIRS if d in folders and not self.rclone.check(
+                self._p("data", d), os.path.join(self.server_dir, d), excludes=sorted(SKIP_NAMES))]
+        bad = incomplete()
+        if bad:
+            log.warning("The download of %s doesn't match the storage; fetching it again", ", ".join(bad))
+            for d in bad:
+                self.rclone.sync(self._p("data", d), os.path.join(self.server_dir, d), excludes=sorted(SKIP_NAMES),
+                                 progress=self._progress_cb())
+            bad = incomplete()
+        if bad:
+            raise HostingError("The world didn't download completely (" + ", ".join(bad) + "). Nothing was changed in the "
+                               "shared storage. Try again in a minute.")
 
     def _before_push(self) -> None:
         with self._lock:
@@ -629,28 +705,44 @@ class RcloneWorld(SharedWorld):
             state.update(pushing=self.clock(), pushingBy=self.host)    # cleared when the upload is complete
             self._write_state(state)                                   # (see _wait_for_sync for what the next start does)
 
-    def _push_data(self) -> tuple:
+    def _push_data(self, source: str = None, keep_history: bool = True) -> tuple:
+        source = source or self.server_dir
+        slow = None if keep_history else self.checkpoint_bwlimit      # a checkpoint runs while players play: go easy
         keep = None
-        if self.history_days > 0:
+        if self.history_days > 0 and keep_history:
             keep = self._p("history", time.strftime("%Y%m%d-%H%M%S", time.gmtime(self.clock())))
         try:
             for d in SYNC_DIRS:
-                src = os.path.join(self.server_dir, d)
+                src = os.path.join(source, d)
                 if os.path.isdir(src):
                     self.progress.stage(d, f"Uploading {STAGE_NAMES[d]}")
                     self.rclone.sync(src, self._p("data", d), excludes=sorted(SKIP_NAMES),
-                                     backup_dir=rjoin(keep, d) if keep else None, progress=self._progress_cb())
+                                     backup_dir=rjoin(keep, d) if keep else None, progress=self._progress_cb(),
+                                     bwlimit=slow)
             self.progress.stage("files", "Uploading the settings")
-            self.rclone.copy_files(self.server_dir, self._p("data"), SYNC_FILES, backup_dir=keep,
-                                   progress=self._progress_cb())
+            self.rclone.copy_files(source, self._p("data"), SYNC_FILES, backup_dir=keep,
+                                   progress=self._progress_cb(), bwlimit=slow)
             self.progress.end_stage()
-            self.progress.note("Checking that everything arrived...", 1.0)
+            self.progress.note("Checking that everything arrived...", step="verify")
         except RcloneError as exc:
             raise HostingError(cap_message() if is_cap_error(exc) else
                                f"Uploading the world failed: {exc}. Nothing was marked as uploaded; it will be "
                                "tried again.") from None
-        self._prune_history()
+        if keep_history:
+            self._prune_history()
         return self._remote_manifest()
+
+    def snapshot(self, dest: str) -> None:
+        """Copy the world folders and settings files of the (running, just flushed) server into dest. Only what changed is
+        copied, by content, so after the first time this takes a moment. The upload then reads dest, not the live files."""
+        try:
+            for d in SYNC_DIRS:
+                src = os.path.join(self.server_dir, d)
+                if os.path.isdir(src):
+                    self.rclone.sync(src, os.path.join(dest, d), excludes=sorted(SKIP_NAMES))
+            self.rclone.copy_files(self.server_dir, dest, SYNC_FILES)
+        except RcloneError as exc:
+            raise HostingError(f"Couldn't copy the world for a checkpoint: {exc}") from None
 
     def _prune_history(self) -> None:
         if self.history_days <= 0:

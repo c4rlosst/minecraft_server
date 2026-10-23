@@ -83,6 +83,51 @@ class ProgressFileTests(unittest.TestCase):
         p.transfer({"bytes": 9, "totalBytes": 10})
         self.assertAlmostEqual(progress.read(self.path, now=self.clock())["fraction"], 0.9)
 
+    def test_a_start_journey_gives_each_step_its_slice_of_one_bar(self):
+        self.p.start_journey("start")
+        self.p.note("Taking the hosting lock...", step="lock")
+        shown = progress.read(self.path, now=self.clock())
+        self.assertEqual((shown["fraction"], shown["span"]), (None, [0.0, 0.08]))     # no numbers: the window creeps
+        self.p.begin("download", "Downloading the world", {"world": 800, "mods": 200})
+        self.p.stage("world")
+        self.p.transfer({"bytes": 400, "totalBytes": 800, "transfers": 5})
+        self.assertAlmostEqual(self.p.fraction(), 0.08 + 0.80 * 0.4)                  # 40% of the download, inside 8-88%
+        self.p.finish()                                                               # the download is done...
+        self.assertIsNotNone(progress.read(self.path, now=self.clock()))              # ...but the bar stays for the next step
+        self.assertAlmostEqual(self.p.fraction(), 0.88)
+        self.p.note("Starting the tunnel and the Discord bot...", step="services")
+        self.assertEqual(progress.read(self.path, now=self.clock())["span"], [0.88, 0.99])
+        self.p.end_journey()
+        self.assertIsNone(progress.read(self.path, now=self.clock()))
+
+    def test_a_stop_journey_and_the_bar_never_goes_backwards(self):
+        self.p.start_journey("stop")
+        seen = []
+        self.p.note("Saving the world and stopping the server...", step="stop")
+        seen.append(self.p.fraction() or 0.0)
+        self.p.begin("upload", "Uploading the world", {"world": 100})
+        self.p.stage("world")
+        for done in (0, 25, 50, 100):
+            self.p.transfer({"bytes": done, "totalBytes": 100, "transfers": 1})
+            seen.append(self.p.fraction())
+        self.p.finish()
+        self.p.note("Checking that everything arrived...", step="verify")
+        seen.append(self.p.span[0])
+        self.p.note("Handing over to the next host...", step="handover")
+        seen.append(self.p.span[0])
+        self.assertEqual(seen, sorted(seen))
+        self.assertAlmostEqual(seen[1], 0.20)                                          # the upload starts at 20%
+        self.assertAlmostEqual(seen[4], 0.90)                                          # and ends at 90%
+
+    def test_a_waiting_step_can_say_it_is_still_working(self):
+        self.p.start_journey("start")
+        self.p.note("Taking the hosting lock...", step="lock")
+        first = progress.read(self.path, now=self.clock())["updated"]
+        self.clock.now += 30
+        self.assertIsNone(progress.read(self.path, now=self.clock() + 30))            # silent for too long: looks dead
+        self.p.touch()
+        self.assertGreater(progress.read(self.path, now=self.clock())["updated"], first)
+
     def test_size_text(self):
         self.assertEqual(progress.size_text(500), "500 B")
         self.assertEqual(progress.size_text(2048), "2 KB")

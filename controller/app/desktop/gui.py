@@ -21,8 +21,11 @@ from tkinter import filedialog, messagebox
 
 from PIL import Image, ImageTk
 
+from .. import errors
+from .. import updates
 from .. import identity
 from .. import progress as progress_file
+from ..version import VERSION
 from .. import sessions as sessions_log
 from ..rclone import Rclone
 from ..shared import STALE_SECONDS, RcloneWorld, is_cap_error
@@ -31,6 +34,7 @@ from . import invite as invites
 from . import feedback
 from . import pixel
 from . import restore as restoring
+from . import textfit
 from .home import APP_NAME, EULA_URL, KEEP, REMOTE, REMOVE, Home, find_tools
 from .icon import make_icon
 from .runner import Controller, Panel, last_error, log_size
@@ -42,6 +46,7 @@ SHARED_EVERY_HOSTING = 1800  # ...while hosting, when this PC already knows what
 CAP_PAUSE = 1800           # ...and after the free daily allowance ran out: asking again only adds noise
 IDENTITY_EVERY = 600       # seconds between checks for a newer server name/picture
 W, H = 860, 680
+PANEL_H = 192                # the two panels under the title: their height; everything below follows from it
 SLOTS = 10
 
 
@@ -76,6 +81,7 @@ class Scene:
         self.canvas = tk.Canvas(parent, width=width, height=height, highlightthickness=0, bd=0, bg="#2b3b4f")
         self.canvas.pack()
         self.family, self.photos, self.width = family, [], width
+        self._fonts = {}
 
     def photo(self, img):
         ph = ImageTk.PhotoImage(img)
@@ -94,6 +100,17 @@ class Scene:
     def field(self, widget, x, y, w, h):
         self.canvas.create_window(x, y, window=widget, anchor="nw", width=w, height=h)
         return widget
+
+    def measure(self, size, bold=False):
+        """A function that returns the pixel width of a string in this font and size."""
+        key = (size, bold)
+        if key not in self._fonts:
+            self._fonts[key] = tk.font.Font(font=self.font(size, bold))
+        return self._fonts[key].measure
+
+    def fit(self, text, size, width, max_lines=1, bold=False):
+        """text wrapped into a box `width` pixels wide with at most max_lines lines (cut with '...'), so it can't spill out."""
+        return textfit.fit_text(text, self.measure(size, bold), width, max_lines)
 
     def entry_style(self, size=11):
         return dict(bg="#000000", fg="#e0e0e0", insertbackground="#ffffff", relief="flat", highlightthickness=2,
@@ -237,6 +254,10 @@ class App:
         self.tray, self.scene, self.avatars = None, None, {}
         self.tick_job, self.ident_stamp, self.identity_at = None, None, 0.0
         self.progress_job, self.refreshing, self.takeover = None, False, False
+        self.py, self._waiting_since, self._logged_error = 0, None, ""
+        self.main_ready = False                          # True while the main screen (not setup) is the one showing
+        self.log_hint_on = False                         # the grey 'nothing here yet' line is in the log box
+        self.update_info, self.update_btn = None, None   # a newer release, when there is one (see updates.py)
         self.progress_path = os.path.join(home.state_dir, "progress.json")
         root.title(APP_NAME)
         root.geometry(f"{W}x{H}")
@@ -246,6 +267,7 @@ class App:
         root.iconphoto(True, icon)
         self._icon = icon
         root.protocol("WM_DELETE_WINDOW", self.on_close)
+        root.after(4000, self.check_updates)
         self.guard = ShutdownGuard(root, self.hosting, lambda: self.later(self.shutdown_attempt))
         self.show_main() if home.configured() else self.show_setup()
         root.after(100, self.pump)
@@ -274,6 +296,7 @@ class App:
         self.root.after(100, self.pump)
 
     def new_scene(self):
+        self.main_ready = False                          # the old screen's widgets are about to be destroyed
         if self.scene is not None:
             self.scene.canvas.destroy()
         self.scene = Scene(self.root, self.family)
@@ -296,47 +319,53 @@ class App:
         win.title("Hosting history and backups")
         win.transient(self.root)
         win.resizable(False, False)
-        dw, dh = 760, 640
+        dw, dh = 760, 616
         s = Scene(win, self.family, dw, dh)
         s.image(pixel.panel(dw, dh), 0, 0)
-        s.text(24, 16, "Who hosted, and backups", 14, "#202020", bold=True)
-        s.text(24, 46, "Hosting history (newest first): who, from when to when, and how it ended.", 10, pixel.LABEL, width=dw - 48)
+        inner = dw - 48
+        s.text(24, 18, "Who hosted, and backups", 14, "#202020", bold=True)
+        s.text(24, 50, "Hosting history, newest first: who, from when to when, how long.", 10, pixel.LABEL)
         box = {k: v for k, v in s.entry_style(10).items() if k != "insertbackground"}      # (a list has no text cursor)
-        who = s.field(tk.Listbox(s.canvas, activestyle="none", exportselection=False, **box), 24, 70, dw - 48, 190)
+        who = s.field(tk.Listbox(s.canvas, activestyle="none", exportselection=False, **box), 24, 76, inner, 168)
         who.insert("end", "Loading...")
-        s.text(24, 276, "Backups on this PC (made when the server stops, and before this PC's world is replaced).", 10,
-               pixel.LABEL, width=dw - 48)
-        pick = s.field(tk.Listbox(s.canvas, activestyle="none", exportselection=False, **box), 24, 300, dw - 48, 190)
-        note = s.text(24, 502, "Pick the backup that was made AFTER the session you want back (a backup holds the world as "
-                               "it was when it was made).", 10, pixel.LABEL, width=dw - 48)
+        s.text(24, 252, "!  means no stop was recorded: the PC crashed, lost power or was closed.", 9, pixel.LABEL)
+        s.text(24, 286, "Backups on this PC", 10, pixel.LABEL)
+        s.text(24, 304, "Made when the server stops, and before this PC's world is replaced.", 9, "#505050")
+        pick = s.field(tk.Listbox(s.canvas, activestyle="none", exportselection=False, **box), 24, 328, inner, 150)
+        note = s.text(24, 490, s.fit("Pick the backup made AFTER the session you want back: a backup holds the world as "
+                                     "it was when it was made.", 10, inner, 2), 10, pixel.LABEL)
         data = {"sessions": [], "backups": restoring.list_backups(self.home.backup_dir)}
+        chars = lambda text, n: textfit.one_line(str(text), len, n)
+
+        def backup_row(b):
+            during = sessions_log.session_at(data["sessions"], b["time"])
+            row = f"{sessions_log._day(b['time'])}, {sessions_log._clock(b['time']):>8}   {b['size'] / 1048576:>4.0f} MB"
+            if during:
+                host = chars(during.get("host", "?"), 18)
+                if b["time"] - float(during["start"]) < 300:
+                    row += f"   as {host}'s session started (the world BEFORE it)"
+                elif during.get("end") is not None and float(during["end"]) - b["time"] < 300:
+                    row += f"   as {host}'s session ended (includes it)"
+                else:
+                    row += f"   during {host}'s session"
+            return row
 
         def show_backups():
             pick.delete(0, "end")
             for b in data["backups"]:
-                during = sessions_log.session_at(data["sessions"], b["time"])
-                label = f"{sessions_log._day(b['time'])}, {sessions_log._clock(b['time'])}   {b['size'] / 1048576:.0f} MB"
-                if during:
-                    host = during.get("host", "?")
-                    if b["time"] - float(during["start"]) < 300:
-                        label += f"   (as {host}'s session started: the world BEFORE it)"
-                    elif during.get("end") is not None and float(during["end"]) - b["time"] < 300:
-                        label += f"   (as {host}'s session ended: includes it)"
-                    else:
-                        label += f"   (during {host}'s session)"
-                pick.insert("end", label)
+                pick.insert("end", backup_row(b))
             if not data["backups"]:
                 pick.insert("end", "No backups on this PC yet.")
 
         def loaded(result, error):
             who.delete(0, "end")
             if error:
-                who.insert("end", f"Can't read the history: {error}")
+                who.insert("end", errors.summarize(error)[0] + ". " + errors.summarize(error)[1])
                 return
             data["sessions"] = list(reversed(result))
             now = time.time()
             for entry in result:
-                who.insert("end", sessions_log.line(entry, now))
+                who.insert("end", sessions_log.row(entry, now))
             if not result:
                 who.insert("end", "Nothing recorded yet. From now on every session is written here.")
             show_backups()
@@ -351,13 +380,14 @@ class App:
             self.restore_zip(data["backups"][chosen[0]]["path"])
 
         def restore_other():
-            path = filedialog.askopenfilename(parent=win, title="Pick a world backup (zip)", filetypes=[("World backup (zip)", "*.zip")])
+            path = filedialog.askopenfilename(parent=win, title="Pick a world backup (zip)",
+                                              filetypes=[("World backup (zip)", "*.zip")])
             if path:
                 win.destroy()
                 self.restore_zip(path)
-        Button(s, 24, 548, 250, 38, "Restore selected backup", restore_selected, primary=True)
-        Button(s, 290, 548, 220, 38, "Pick another file...", restore_other)
-        Button(s, dw - 24 - 120, 548, 120, 38, "Close", win.destroy)
+        Button(s, 24, 556, 210, 40, "Restore selected", restore_selected, size=10, primary=True)
+        Button(s, 246, 556, 190, 40, "Choose a file...", restore_other, size=10)
+        Button(s, dw - 24 - 120, 556, 120, 40, "Close", win.destroy, size=10)
 
     def restore_zip(self, path):
         """Put a backup (a world-....zip) back as THE world: for a session that was never uploaded."""
@@ -389,28 +419,29 @@ class App:
     def show_setup(self, can_cancel=False):
         s = self.new_scene()
         img, top = backdrop(APP_NAME.upper())
-        px, py, pw, ph = 60, top + 24, W - 120, H - top - 44
+        pw, ph = W - 120, 452
+        px, py = 60, top + 28
         img.alpha_composite(pixel.panel(pw, ph), (px, py))
         s.image(img, 0, 0)
-        x = px + 24
-        s.text(x, py + 16, "1. Paste the invite code", 11, pixel.LABEL)
-        Button(s, px + pw - 24 - 120, py + 8, 120, 28, "Paste", self.paste_invite, size=10)
-        s.text(x, py + 42, f"An invite code is one long line of text that starts with {invites.PREFIX} It holds this "
-                           "server's settings. Whoever runs the server makes it for you and sends it privately.",
-               9, "#505050", width=pw - 48)
+        x, inner = px + 28, pw - 56
+        s.text(x, py + 22, "1. Paste the invite code", 11, pixel.LABEL)
+        Button(s, px + pw - 28 - 120, py + 14, 120, 28, "Paste", self.paste_invite, size=10)
+        s.text(x, py + 50, s.fit(f"An invite code is one long line of text that starts with {invites.PREFIX} It holds this "
+                                 "server's settings. Whoever runs the server makes it for you and sends it privately.",
+                                 9, inner, 2), 9, "#505050")
         self.invite_box = s.field(tk.Text(s.canvas, wrap="char", padx=8, pady=6, **s.entry_style(10)),
-                                  x, py + 86, pw - 48, 84)
-        s.text(x, py + 190, "2. A name for this PC (others see it while you host)", 11, pixel.LABEL)
+                                  x, py + 84, inner, 84)
+        s.text(x, py + 196, "2. A name for this PC (others see it while you host)", 11, pixel.LABEL)
         self.name_var = tk.StringVar(value=self.home.settings().get("HOST_NAME") or os.environ.get("USERNAME", ""))
-        s.field(tk.Entry(s.canvas, textvariable=self.name_var, **s.entry_style(12)), x, py + 214, 300, 32)
-        self.eula = Checkbox(s, x, py + 264, "3. I accept the Minecraft EULA")
+        s.field(tk.Entry(s.canvas, textvariable=self.name_var, **s.entry_style(12)), x, py + 222, 300, 32)
+        self.eula = Checkbox(s, x, py + 280, "3. I accept the Minecraft EULA")
         link_x = x + 36 + tk.font.Font(font=s.font(11)).measure("3. I accept the Minecraft EULA") + 12
-        s.text(link_x, py + 268, "(read it)", 11, "#2c55c9", tags=("eula_link",))
+        s.text(link_x, py + 284, "(read it)", 11, "#2c55c9", tags=("eula_link",))
         s.canvas.tag_bind("eula_link", "<Button-1>", lambda _e: webbrowser.open(EULA_URL))
-        self.setup_btn = Button(s, x, py + 312, 200, 40, "Set up", self.do_setup, primary=True)
+        self.setup_btn = Button(s, x, py + 336, 200, 40, "Set up", self.do_setup, primary=True)
         if can_cancel:
-            Button(s, x + 216, py + 312, 140, 40, "Cancel", self.show_main)
-        self.setup_msg = s.text(x, py + 368, "", 11, pixel.LABEL, width=pw - 48)
+            Button(s, x + 216, py + 336, 140, 40, "Cancel", self.show_main)
+        self.setup_msg = s.text(x, py + 392, "", 11, pixel.LABEL, width=inner)
         self.root.after(300, lambda: self.paste_invite(quiet=True))      # an invite already on the clipboard is used
 
     def setup_note(self, text, error=False):
@@ -474,21 +505,25 @@ class App:
         s = self.new_scene()
         img, top = backdrop(face["name"], face["icon_path"])
         address = settings.get("PUBLIC_ADDRESS", "")
-        py = top + 32 + (22 if face["description"] else 0) + (34 if address else 0)
-        img.alpha_composite(pixel.wood_panel(400, 180), (20, py))
+        py = self.py = top + 32 + (22 if face["description"] else 0) + (34 if address else 0)
+        by = py + PANEL_H + 12                                   # the row of buttons, 12 under the panels
+        log_y = by + 40 + 12                                     # the log panel, 12 under the buttons
+        img.alpha_composite(pixel.wood_panel(400, PANEL_H), (20, py))
         img.alpha_composite(pixel.plaque(190, 26), (20 + 105, py - 12))
-        img.alpha_composite(pixel.panel(400, 180), (440, py))
-        log_y = py + 244
+        img.alpha_composite(pixel.panel(400, PANEL_H), (440, py))
         img.alpha_composite(pixel.panel(W - 40, H - log_y - 14), (20, log_y))
         s.image(img, 0, 0)
 
         Button(s, W - 20 - 130, 22, 130, 28, "Hide to tray", self.hide_to_tray, size=10)
         Button(s, W - 20 - 130, 56, 130, 28, "New invite", self.new_invite, size=10)   # under it: the picture is top left
         Button(s, W - 20 - 130, 90, 130, 28, "History", self.history_dialog, size=10)
+        self.update_btn = None
+        if self.update_info:
+            self.add_update_button(s)
 
         y = top + 6                                      # under the title: description, then the address to share
         if face["description"]:
-            s.text(W // 2, y, face["description"], 11, "#ffffff", "#2a2a2a", anchor="n", width=540)
+            s.text(W // 2, y, s.fit(face["description"], 11, 540), 11, "#ffffff", "#2a2a2a", anchor="n")
             y += 24
         if address:                                      # the address and its Copy button, centred as one group
             text_w = tk.font.Font(font=s.font(12)).measure(address)
@@ -496,23 +531,27 @@ class App:
             s.text(left, y + 14, address, 12, "#ffffff", "#2a2a2a", anchor="w")
             self.copy_btn = Button(s, left + text_w + 14, y, 76, 26, "Copy", lambda: self.copy_address(address), size=10)
 
+        # -- the shared world (left panel): what is stored and who hosts, then a light and Refresh along the bottom --------
         s.text(20 + 200, py + 1, "SHARED WORLD", 10, "#f0dcbe", "#3b2410", anchor="center")
-        self.shared_txt = s.text(40, py + 30, "Looking...", 12, "#ffffff", "#3b2410", width=360)
-        self.light = s.canvas.create_rectangle(40, py + 150, 52, py + 162, fill="#7f7f7f", outline="#000000", width=2)
-        self.light_txt = s.text(60, py + 147, "", 10, "#ffffff", "#3b2410")
-        self.refresh_btn = Button(s, 20 + 400 - 108, py + 180 - 44, 92, 28, "Refresh",
+        self.shared_txt = s.text(40, py + 30, "Looking...", 12, "#ffffff", "#3b2410")
+        self.light = s.canvas.create_rectangle(40, py + 148, 52, py + 160, fill="#7f7f7f", outline="#000000", width=2)
+        self.light_txt = s.text(62, py + 145, "", 10, "#ffffff", "#3b2410")
+        self.checked_txt = s.text(40, py + 168, "", 9, "#f0dcbe", "#3b2410")
+        self.refresh_btn = Button(s, 20 + 400 - 108, py + 146, 92, 28, "Refresh",
                                   lambda: self.refresh_shared(full=True, manual=True), size=10)
-        self.checked_txt = s.text(40, py + 164, "", 9, "#d8c8a8", "#3b2410")
 
-        s.text(460, py + 16, f"This PC ({settings.get('HOST_NAME', '')})", 11, pixel.LABEL)
-        self.local_txt = s.text(460, py + 42, "", 12, "#202020", width=360)
+        # -- this PC (right panel): its name and a status chip, one or two lines, then players or the progress bar --------
+        s.text(460, py + 16, s.fit(f"This PC ({settings.get('HOST_NAME', '')})", 11, 220), 11, pixel.LABEL)
+        self.chip_dot = s.canvas.create_rectangle(0, 0, 0, 0, fill="#7f7f7f", outline="#000000", width=2)
+        self.chip_txt = s.text(820, py + 16, "", 10, "#404040", anchor="ne")
+        self.local_txt = s.text(460, py + 46, "", 12, "#202020")
+        self.players_txt = s.text(460, py + 106, "", 10, pixel.LABEL)
         self.slot_imgs, self.slot_bgs = [], []
         for i in range(SLOTS):
-            self.slot_bgs.append(s.image(pixel.slot(36), 460 + i * 36, py + 122))
-            self.slot_imgs.append(s.canvas.create_image(460 + i * 36 + 4, py + 126, anchor="nw", state="hidden"))
-        self.players_txt = s.text(460, py + 102, "", 10, pixel.LABEL)
+            self.slot_bgs.append(s.image(pixel.slot(36), 460 + i * 36, py + 128))
+            self.slot_imgs.append(s.canvas.create_image(460 + i * 36 + 4, py + 132, anchor="nw", state="hidden"))
 
-        by, gap = py + 192, 8
+        gap = 8
         bw = (W - 40 - 5 * gap) // 6
         labels = (("Start hosting", self.start_hosting, True), ("Stop hosting", self.stop_hosting, False),
                   ("Web panel", self.open_panel, False), ("Server info", self.server_dialog, False),
@@ -525,22 +564,54 @@ class App:
         self.stop_btn.blocked = lambda: self.say(self.why("stop"), "warn")
         self.panel_btn.blocked = lambda: self.say(self.why("panel"), "warn")
 
+        # -- the log: a heading row (with Copy log), then the text --------------------------------------------------------
+        s.text(40, log_y + 14, "SERVER LOG", 9, pixel.LABEL)
+        Button(s, W - 20 - 16 - 110, log_y + 8, 110, 24, "Copy log", self.copy_log, size=9)
         self.log_box = s.field(tk.Text(s.canvas, wrap="word", padx=8, pady=6, state="disabled", **s.entry_style(10)),
-                               36, log_y + 16, W - 72, H - log_y - 46)
+                               36, log_y + 38, W - 72, H - log_y - 68)
         size = log_size(self.home.log_path)
         self.log_pos, self.log_started = max(0, size - 6000), False
-        self.bar = feedback.ExpBar(s, 460, py + 136, 360)          # the experience bar for loading / saving
-        self.toast = feedback.Toast(s, W // 2, 68, w=460, h=44)              # the short message after a click (over the title area:
-        #                                                         a canvas item can't sit on top of the log's text box)
+        self.log_box.tag_config("hint", foreground="#7a7a7a")
+        self.log_box.config(state="normal")
+        self.log_box.insert("end", "Nothing here yet. This fills in when you start hosting.", "hint")
+        self.log_box.config(state="disabled")
+        self.log_hint_on = True
+        s.text(W - 24, H - 7, f"SMP Host {VERSION}", 8, "#f0f0f0", "#2a2a2a", anchor="e")     # which build this is, for support
+        self.bar = feedback.ProgressBar(s, 460, py + 138, 360)     # the progress bar for starting / saving / downloading
+        self.toast = feedback.Toast(s, W // 2, 68, w=460, h=44)    # the short message after a click (over the title area:
+        #                                                            a canvas item can't sit on top of the log's text box)
+        self.main_ready = True
         self.refresh_shared(full=True)
         self.tick()
         if self.progress_job is not None:
             self.root.after_cancel(self.progress_job)
         self.progress_job = self.root.after(250, self.progress_tick)
 
+    # -- a newer version ----------------------------------------------------------------------------------------
+    def check_updates(self):
+        """Ask GitHub (in the background) whether there is a newer release; ask again in six hours."""
+        if self.home.settings().get("CHECK_UPDATES", "1") != "0":
+            self.in_background(lambda: updates.check(VERSION), self._update_found)
+        self.root.after(6 * 3600 * 1000, self.check_updates)
+
+    def _update_found(self, result, _error):
+        self.update_info = result
+        if result and self.main_ready and self.update_btn is None:
+            self.add_update_button(self.scene)
+            self.say(f"A newer SMP Host ({result['version']}) is out. Use the green Update button.", "ok")
+
+    def add_update_button(self, s):
+        info = self.update_info
+        self.update_btn = Button(s, W - 20 - 130, 124, 130, 28, f"Update {info['version']}", self.open_update, size=10,
+                                 primary=True)
+
+    def open_update(self):
+        webbrowser.open((self.update_info or {}).get("url") or updates.PAGE)
+        self.say("Opening the download page. Close SMP Host (also in the tray) before you install it.", "info")
+
     # -- feedback: the bar, the toast, and what a click says back -----------------------------------------
     def say(self, text, kind="info"):
-        if self.scene is not None and hasattr(self, "toast"):
+        if self.scene is not None and self.main_ready:
             self.toast.show(text, kind)
 
     def why(self, button):
@@ -550,16 +621,25 @@ class App:
         """Four times a second: what is the controller doing right now, and how far along is it?"""
         self.progress_job = None
         try:
-            if self.scene is None or not hasattr(self, "bar"):
+            if self.scene is None or not self.main_ready:
                 return
             job = progress_file.read(self.progress_path)
             getting_ready = self.controller.running() and not self.listening
             if job:
-                self.bar.show(*feedback.bar_text(job))
-            elif getting_ready or self.busy:
-                self.bar.show((self.busy or "Starting up...").split("...")[0].strip() + "...", None, "")
-            else:
-                self.bar.hide()
+                label, fraction, detail, span, since = feedback.bar_text(job)
+                self.bar.show(self.scene.fit(label, 10, 300), fraction, detail, span, since)
+                self._waiting_since = None
+            elif self.bar.visible:                              # the controller's job file is gone
+                self._waiting_since = None
+                if self.bar.target >= 0.8:
+                    self.bar.complete()                         # it got far, so it worked: glide to 100, then away
+                elif getting_ready or self.busy:
+                    pass                                        # still starting: leave the bar where it is (never back)
+                else:
+                    self.bar.hide()                             # it stopped early (an error): no pretend 100
+            elif getting_ready or self.busy:                    # the controller hasn't said anything yet: creep forward
+                self._waiting_since = self._waiting_since or time.time()
+                self.bar.show(self.scene.fit(self.busy_head(), 10, 300), None, "", (0.0, 0.06), self._waiting_since)
             shown = "hidden" if self.bar.visible else "normal"
             for item in self.slot_bgs:
                 self.scene.canvas.itemconfig(item, state=shown)
@@ -567,13 +647,31 @@ class App:
                 self.players_txt.set("")
         except tk.TclError:
             return                                       # the window is being rebuilt or closed
-        self.progress_job = self.root.after(250, self.progress_tick)
+        active = bool(job) or getting_ready or bool(self.busy) or self.bar.visible
+        self.progress_job = self.root.after(250 if active else 1000, self.progress_tick)    # slow when nothing is going on
+
+    def busy_head(self):
+        """The first words of the busy message, for the bar's caption."""
+        return (self.busy or "Starting up...").split("...")[0].strip() + "..."
+
+    def busy_sentence(self):
+        """The busy message as one or two short lines for the This PC panel."""
+        if "handing over" in self.busy:
+            return "Saving and handing over. Keep the PC on until it says Done."
+        return self.busy
 
     def copy_address(self, address):
         self.copy(address)
         self.copy_btn.set_label("Copied!")
-        self.root.after(1500, lambda: self.copy_btn.set_label("Copy") if self.scene is not None else None)
+        self.root.after(1500, self._copy_label_back)
         self.say(f"Copied {address}. In Minecraft: Multiplayer > Add Server > paste it.", "ok")
+
+    def _copy_label_back(self):
+        if self.main_ready:
+            try:
+                self.copy_btn.set_label("Copy")
+            except tk.TclError:
+                pass                                       # the screen was rebuilt meanwhile
 
     def open_folder(self):
         os.startfile(self.home.root)
@@ -618,7 +716,7 @@ class App:
             self.shared_state, self.shared_error = state, (str(error) if error else "")
             if error and is_cap_error(error):
                 self.shared_at = time.time() + CAP_PAUSE - SHARED_EVERY     # wait longer before the next automatic look
-            if self.scene is not None and hasattr(self, "checked_txt"):
+            if self.scene is not None and self.main_ready:
                 try:
                     self.checked_txt.set("Checked " + time.strftime("%I:%M %p").lstrip("0"))
                 except tk.TclError:
@@ -681,7 +779,12 @@ class App:
         self.busy = ""
         why = last_error(self.home.log_path, self.log_start)
         if code not in (0, None) or why:
-            messagebox.showwarning(APP_NAME, why or f"Hosting stopped unexpectedly (code {code}). See the log below.")
+            plain = errors.explain(why)
+            if plain:
+                text = plain + "\n\n(" + why[:240] + ")"
+            else:
+                text = why or f"Hosting stopped unexpectedly (code {code}). See the log below."
+            messagebox.showwarning(APP_NAME, text)
         self.refresh_shared()
 
     def read_log(self):
@@ -704,70 +807,126 @@ class App:
         self.log_pos += end + 1
         text = friendly_log(chunk.decode("utf-8", "replace"))
         if text:
+            self._clear_hint()
             self.log_box.config(state="normal")
             self.log_box.insert("end", text)
             self.log_box.delete("1.0", "end-400l")          # keep the last 400 lines
             self.log_box.see("end")
             self.log_box.config(state="disabled")
 
-    def render(self):
-        if self.scene is None or not hasattr(self, "shared_txt"):
-            return
-        me = self.home.settings().get("HOST_NAME", "")
-        s, now = self.shared_state, time.time()
-        light, light_text = "#7f7f7f", ""
+    def shared_view(self, me, now):
+        """(lines, light colour, light text) for the Shared World box. Each line is (text, most lines it may use)."""
+        s = self.shared_state
         if self.shared_error:
-            shared, light, light_text = f"Can't reach the shared world:\n{self.shared_error}", "#d23b3b", "Offline"
-        elif s is None:
-            shared = "Looking..." if not self.shared_at else "The shared world is empty.\nThe owner uploads it first."
+            head, detail = errors.summarize(self.shared_error)
+            return [(head, 1), (detail, 2), ("More in the log below.", 1)], "#d23b3b", "Offline"
+        if s is None:
+            if not self.shared_at:
+                return [("Looking...", 1)], "#7f7f7f", ""
+            return [("The shared world is empty.", 1), ("The owner uploads it first.", 1)], "#7f7f7f", ""
+        when = ago(now - float(s["lastPush"])) if s.get("lastPush") else "never"
+        lines = [(f"Version {s.get('version', 0)}, uploaded {when}", 1),
+                 (f"Last host: {s.get('lastHost') or s.get('host') or 'nobody'}", 1)]
+        if s.get("status") == "hosting":
+            alive = now - float(s.get("lastSeen", 0)) < STALE_SECONDS
+            who = "you" if s.get("host") == me else s.get("host")
+            lines.append((f"Hosting now: {who}", 1))
+            light, light_text = ("#4cc04c", "You are hosting") if who == "you" else \
+                (("#e6b422", f"{who} is hosting") if alive else ("#d23b3b", f"{who} isn't responding"))
         else:
-            when = ago(now - float(s["lastPush"])) if s.get("lastPush") else "never"
-            shared = (f"Version {s.get('version', 0)}, uploaded {when}\n"
-                      f"Last host: {s.get('lastHost') or s.get('host') or 'nobody'}\n")
-            if s.get("status") == "hosting":
-                alive = now - float(s.get("lastSeen", 0)) < STALE_SECONDS
-                who = "you" if s.get("host") == me else s.get("host")
-                shared += f"Hosting now: {who}"
-                light, light_text = ("#4cc04c", "You are hosting") if who == "you" else \
-                    (("#e6b422", f"{who} is hosting") if alive else ("#d23b3b", f"{who} isn't responding"))
+            lines.append(("Hosting now: nobody", 1))
+            light, light_text = "#4cc04c", "Free: you can start"
+        if s.get("pushing"):
+            if s.get("pushingBy") == me and self.hosting():
+                lines.append(("Uploading the world right now...", 1))
             else:
-                shared += "Hosting now: nobody"
-                light, light_text = "#4cc04c", "Free: you can start"
-            if s.get("pushing"):
-                if s.get("pushingBy") == me and self.hosting():
-                    shared += "\nUploading the world right now..."
-                else:
-                    shared += f"\n{s.get('pushingBy') or 'someone'}'s last upload never finished!"
-        self.shared_txt.set(shared)
-        self.scene.canvas.itemconfig(self.light, fill=light)
-        self.light_txt.set(light_text)
+                lines.append((f"{s.get('pushingBy') or 'someone'}'s last upload never finished!", 1))
+        return lines, light, light_text
 
-        names = []
+    def local_view(self, me, now):
+        """(chip colour, chip text, one or two lines, player names) for the This PC panel."""
         if self.busy:
-            local = self.busy
-        elif self.local:
+            return "#e6b422", "Working", self.busy_sentence(), []
+        if self.local:
             state, players = self.local.get("state"), self.local.get("players", 0)
             names = list(self.local.get("names") or [])
-            local = {"asleep": "Hosting. The server is asleep and wakes up when someone joins.",
-                     "starting": "Hosting. The server is starting...",
-                     "online": f"Hosting. Online with {players} player{'s' if players != 1 else ''}.",
-                     "stopping": "Hosting. The server is saving and stopping...",
-                     }.get(state, f"Hosting ({state}).")
-        elif self.controller.running():
-            local = "Getting ready: taking the lock and downloading the latest world..."
-        else:
-            local = "Not hosting."
-        self.local_txt.set(local)
-        self.players_txt.set(f"Players online: {len(names)}/{SLOTS}" if self.local else "")
+            body, chip, color = {
+                "asleep": ("The server is asleep and wakes up when someone joins.", "Hosting", "#4cc04c"),
+                "starting": ("The server is starting. This takes about a minute.", "Starting", "#e6b422"),
+                "online": (f"Online with {players} player{'s' if players != 1 else ''}.", "Online", "#4cc04c"),
+                "stopping": ("The server is saving and stopping...", "Saving", "#e6b422"),
+            }.get(state, (f"Hosting ({state}).", "Hosting", "#4cc04c"))
+            return color, chip, body, names
+        if self.controller.running():
+            return "#e6b422", "Getting ready", "Getting the world ready. This can take a minute.", []
+        s = self.shared_state or {}
+        if s.get("status") == "hosting" and s.get("host") != me and now - float(s.get("lastSeen", 0)) < STALE_SECONDS:
+            return "#7f7f7f", "Not hosting", f"{s.get('host')} is hosting. Join their server.", []
+        return "#7f7f7f", "Not hosting", "Press Start hosting when it's your turn.", []
+
+    def set_chip(self, color, text):
+        """The small coloured square and word at the top right of the This PC panel."""
+        sc = self.scene
+        self.chip_txt.set(text)
+        width = sc.measure(10)(text)
+        top = self.py + 17
+        sc.canvas.coords(self.chip_dot, 820 - width - 22, top, 820 - width - 10, top + 12)
+        sc.canvas.itemconfig(self.chip_dot, fill=color)
+
+    def render(self):
+        if self.scene is None or not self.main_ready:
+            return
+        sc = self.scene
+        me = self.home.settings().get("HOST_NAME", "")
+        now = time.time()
+        lines, light, light_text = self.shared_view(me, now)
+        self.shared_txt.set("\n".join(sc.fit(text, 12, 360, n) for text, n in lines))
+        sc.canvas.itemconfig(self.light, fill=light)
+        self.light_txt.set(sc.fit(light_text, 10, 230))
+        if self.shared_error and self.shared_error != self._logged_error:
+            self._logged_error = self.shared_error               # the full text of an error goes to the log, once
+            self.log_add("!  " + self.shared_error)
+        elif not self.shared_error:
+            self._logged_error = ""
+
+        color, chip, body, names = self.local_view(me, now)
+        self.set_chip(color, chip)
+        self.local_txt.set(sc.fit(body, 12, 360, 2))
+        self.players_txt.set(f"Players online: {len(names)}/{SLOTS}" if self.local and not self.bar.visible else "")
         for i, item in enumerate(self.slot_imgs):
             if i < len(names):
-                self.scene.canvas.itemconfig(item, image=self.avatar(names[i]), state="normal")
+                sc.canvas.itemconfig(item, image=self.avatar(names[i]), state="normal")
             else:
-                self.scene.canvas.itemconfig(item, state="hidden")
+                sc.canvas.itemconfig(item, state="hidden")
         hosting = self.hosting()
         self.host_btn.set_enabled(not hosting and not self.busy)
         self.stop_btn.set_enabled(hosting and not self.expect_exit and not self.busy)
         self.panel_btn.set_enabled(self.listening)
+
+    def _clear_hint(self):
+        if self.log_hint_on:
+            self.log_hint_on = False
+            self.log_box.config(state="normal")
+            self.log_box.delete("1.0", "end")
+            self.log_box.config(state="disabled")
+
+    def copy_log(self):
+        text = "" if self.log_hint_on else self.log_box.get("1.0", "end").strip()
+        if not text:
+            return self.say("The log is empty.", "warn")
+        self.copy(text)
+        self.say("Copied the log. Paste it where you ask for help.", "ok")
+
+    def log_add(self, text):
+        """A line for the log box that isn't from the controller's own log (the full error behind a short message)."""
+        try:
+            self._clear_hint()
+            self.log_box.config(state="normal")
+            self.log_box.insert("end", time.strftime("%H:%M:%S") + "  " + text + "\n")
+            self.log_box.see("end")
+            self.log_box.config(state="disabled")
+        except tk.TclError:
+            pass
 
     # -- actions --------------------------------------------------------------------------------------
     def start_hosting(self):
@@ -780,16 +939,22 @@ class App:
         self.takeover = False
         if s.get("status") == "hosting" and s.get("host") != me:      # not alive (checked above): its PC may be gone
             minutes = int((time.time() - float(s.get("lastSeen", 0))) // 60)
+            saved = (f"The newest saved copy of the world is from {ago(time.time() - float(s['lastPush']))} (the app saves "
+                     "a checkpoint every 20 minutes while hosting)." if s.get("lastPush") else
+                     "Nothing has been saved to the cloud yet.")
             if not messagebox.askyesno(APP_NAME, f"{s.get('host')} was hosting but hasn't checked in for {minutes} "
                                                  "min (the PC may have crashed or lost power, or it is still uploading)."
-                                                 "\n\nAsk them first: their last session may only be on their PC, and "
-                                                 "taking over means starting from the last upload.\n\nTake over "
-                                                 "hosting anyway?", icon="warning"):
+                                                 f"\n\n{saved}\n\nAsk them first: what they did after that may only be "
+                                                 "on their PC, and taking over means starting from that saved copy."
+                                                 "\n\nTake over hosting anyway?", icon="warning"):
                 return
             self.takeover = True
         if self.listening and not self.controller.running():     # (the last background check, so no pause here)
             return messagebox.showwarning(APP_NAME, "Something is already using this PC's server port (the old "
                                                     "Start SMP window?). Close it first.")
+        problem = self.home.disk_problem()
+        if problem:
+            return messagebox.showwarning(APP_NAME, problem)
         if self.home.uses_tunnel(self.tools) and other_playit_running() and not self.stop_other_playit():
             return
         if not self.home.has_launcher():
@@ -911,8 +1076,8 @@ class App:
 
         s.image(pixel.slot(140), 24, 86)
         big = s.canvas.create_image(30, 92, anchor="nw")
-        Button(s, 24, 238, 140, 32, "Choose picture", lambda: choose(), size=10)
-        Button(s, 24, 276, 140, 32, "Remove picture", lambda: remove(), size=10)
+        Button(s, 24, 238, 150, 32, "Choose picture", lambda: choose(), size=10)
+        Button(s, 24, 276, 150, 32, "Remove picture", lambda: remove(), size=10)
 
         name_var, desc_var = tk.StringVar(value=face["name"]), tk.StringVar(value=face["description"])
         s.text(190, 86, "Name", 10, pixel.LABEL)
@@ -1009,19 +1174,20 @@ class App:
         win.title("Invite a friend")
         win.transient(self.root)
         win.resizable(False, False)
-        dw, dh = 600, 470
+        dw, dh = 600, 548
         s = Scene(win, self.family, dw, dh)
         s.image(pixel.panel(dw, dh), 0, 0)
         s.text(24, 20, "Invite a friend", 14, "#202020", bold=True)
         r2 = self.home.storage_kind()["type"] == "r2"
         if r2:
-            s.text(24, 50, "In Cloudflare (R2 > Manage API tokens), make an API token for your friend: Object Read & "
-                           "Write, this bucket only. Paste its Access Key ID and Secret Access Key here.",
-                   10, pixel.LABEL, width=dw - 48)
+            intro = ("In Cloudflare (R2 > Manage API tokens), make an API token for your friend: Object Read & Write, "
+                     "this bucket only. Paste its Access Key ID and Secret Access Key here.")
         else:
-            s.text(24, 50, "On the Backblaze website, make an application key for your friend (that bucket only, Read "
-                           "and Write). Paste it here.", 10, pixel.LABEL, width=dw - 48)
-        fields, y = {}, 100
+            intro = ("On the Backblaze website, make an application key for your friend (that bucket only, Read and "
+                     "Write). Paste it here.")
+        text = s.text(24, 56, s.fit(intro, 10, dw - 48, 4), 10, pixel.LABEL)
+        y = s.canvas.bbox(text.main)[3] + 20                          # start the fields below however long the intro is
+        fields = {}
         for label, key, default, secret in (("Bucket", "bucket", remote.split(":", 1)[1]
                                              if remote.startswith(REMOTE + ":") else "", False),
                                             ("Access Key ID" if r2 else "keyID", "key_id", "", False),
@@ -1029,22 +1195,23 @@ class App:
             s.text(24, y, label, 10, pixel.LABEL)
             var = tk.StringVar(value=default)
             s.field(tk.Entry(s.canvas, textvariable=var, show="*" if secret else "", **s.entry_style(11)),
-                    24, y + 20, dw - 48, 30)
-            fields[key], y = var, y + 62
-        out = s.field(tk.Text(s.canvas, wrap="char", padx=8, pady=6, **s.entry_style(9)), 24, y + 52, dw - 48, 90)
-        note = s.text(24, y + 150, "", 10, "#aa0000", width=dw - 48)
+                    24, y + 22, dw - 48, 30)
+            fields[key], y = var, y + 68
+        Button(s, 24, y, 200, 38, "Create invite", lambda: create(), primary=True)
+        y += 38 + 22
+        s.text(24, y, "Send this code to your friend privately (it is also copied).", 10, pixel.LABEL)
+        out = s.field(tk.Text(s.canvas, wrap="char", padx=8, pady=6, **s.entry_style(9)), 24, y + 22, dw - 48, 86)
+        note = s.text(24, y + 22 + 86 + 12, "", 10, "#aa0000", width=dw - 48)
 
         def create():
             try:
                 code = self.home.make_invite_for(fields["bucket"].get(), fields["key_id"].get(), fields["key"].get())
             except invites.InviteError as exc:
-                return note.set(str(exc), "#aa0000")
+                return note.set(s.fit(str(exc), 10, dw - 48, 2), "#aa0000")
             out.delete("1.0", "end")
             out.insert("1.0", code)
             self.copy(code)
-            note.set("Copied! Send it privately (a direct message, never a public channel): anyone with it can "
-                     "host your world.", "#1e6b1e")
-        Button(s, 24, y + 4, 200, 38, "Create invite", create, primary=True)
+            note.set("Copied! Never post it in a public channel: anyone with it can host your world.", "#1e6b1e")
 
     # -- closing and the tray ---------------------------------------------------------------------------
     def on_close(self):
@@ -1093,7 +1260,7 @@ class App:
     def show_window(self):
         self.root.deiconify()
         self.root.lift()
-        if self.scene is not None and hasattr(self, "shared_txt"):
+        if self.scene is not None and self.main_ready:
             self.refresh_shared()                         # it didn't look while hidden: catch up now
 
     def quit(self):

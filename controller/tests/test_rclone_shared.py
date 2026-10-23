@@ -415,3 +415,66 @@ class RcloneSharedTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ChangedContentIsNeverSkippedTests(unittest.TestCase):
+    """The silent-loss bug: a world file whose content changed but whose size and modified time did not."""
+
+    def test_a_rewritten_file_with_the_same_size_and_time_is_still_copied(self):
+        import tempfile
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        src, dst = os.path.join(tmp.name, "src"), os.path.join(tmp.name, "dst")
+        os.makedirs(src)
+        path = os.path.join(src, "r.0.0.mca")
+        with open(path, "wb") as f:
+            f.write(b"A" * 8192)
+        stamp = os.stat(path).st_mtime_ns
+        rclone = Rclone("rclone")
+        rclone.sync(src, dst)
+        with open(path, "wb") as f:
+            f.write(b"B" * 8192)
+        os.utime(path, ns=(stamp, stamp))                              # what a stale Windows timestamp looks like
+        rclone.sync(src, dst)
+        with open(os.path.join(dst, "r.0.0.mca"), "rb") as f:
+            self.assertEqual(f.read()[:1], b"B")
+        with open(path, "wb") as f:
+            f.write(b"C" * 8192)
+        os.utime(path, ns=(stamp, stamp))
+        rclone.copy_files(src, dst, ["r.0.0.mca"])                     # the loose files too
+        with open(os.path.join(dst, "r.0.0.mca"), "rb") as f:
+            self.assertEqual(f.read()[:1], b"C")
+
+
+class RefusedDownloadIsNotAMissingFileTests(unittest.TestCase):
+    """B2 answers a refused download (the free daily download limit) with 'success, nothing', exactly like a missing file.
+    A missing lock file means 'brand new shared world'; a refused one must never be taken for that."""
+
+    class FakeRun:
+        def __init__(self, listing):
+            self.listing, self.calls = listing, []
+
+        def __call__(self, cmd, input=None, capture_output=True, timeout=None, creationflags=0):
+            self.calls.append(cmd[1])
+            out = json.dumps(self.listing).encode() if cmd[1] == "lsjson" else b""
+            return subprocess.CompletedProcess(cmd, 0, out, b"")
+
+    def test_nothing_back_for_a_file_that_exists_is_an_error_not_none(self):
+        run = self.FakeRun([{"Name": "state.json", "IsDir": False, "Size": 193}])
+        rclone = Rclone("rclone", run=run, which=lambda exe: "rclone")
+        with self.assertRaises(RcloneError) as caught:
+            rclone.cat("smp:japax-java-2026/state.json")
+        self.assertIn("download_cap_exceeded", str(caught.exception))
+        self.assertTrue(shared.is_cap_error(caught.exception))                 # and the app words it as the daily limit
+
+    def test_nothing_back_for_a_file_that_is_really_missing_is_none(self):
+        run = self.FakeRun([{"Name": "identity.json", "IsDir": False}])
+        rclone = Rclone("rclone", run=run, which=lambda exe: "rclone")
+        self.assertIsNone(rclone.cat("smp:japax-java-2026/state.json"))
+
+    def test_the_lock_read_says_the_limit_is_used_up_instead_of_looking_empty(self):
+        run = self.FakeRun([{"Name": "state.json", "IsDir": False}])
+        world = RcloneWorld("smp:japax-java-2026", "server", "A", Rclone("rclone", run=run, which=lambda exe: "rclone"))
+        with self.assertRaises(HostingError) as caught:
+            world.read_state()
+        self.assertIn("daily limit", str(caught.exception))

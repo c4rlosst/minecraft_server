@@ -186,6 +186,18 @@ class Home:
         return make(shared, playit, {"type": "b2", "bucket": bucket.strip(), "account": key_id.strip(),
                                      "key": key.strip()})
 
+    def disk_problem(self, need_gb: float = 2.0) -> str:
+        """Why hosting can't start for lack of disk space ('' when there is enough). The world is downloaded here and a
+        backup zip of it is written each time the server stops, so a nearly full disk ends in a half-written world."""
+        try:
+            free = shutil.disk_usage(self.root if os.path.isdir(self.root) else os.path.dirname(self.root)).free
+        except OSError:
+            return ""
+        if free >= need_gb * 1e9:
+            return ""
+        return (f"Only {free / 1e9:.1f} GB of disk space is free on this PC, and hosting needs about {need_gb:.0f} GB for "
+                "the world and its backup. Free up some space and try again.")
+
     def uses_tunnel(self, tools: Tools) -> bool:
         """True when hosting here would start the app's own playit agent (an invite that carries a tunnel identity)."""
         return bool(tools.playitd) and os.path.isfile(self.playit_secret)
