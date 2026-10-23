@@ -97,8 +97,9 @@ def check_zip(path: str) -> None:
         raise RestoreError(f"Can't open the zip: {exc}") from None
 
 
-def restore(home: Home, rclone: Rclone, zip_path: str, report=print, force=False, clock=time.time) -> str:
-    """Returns the folder the previous world was moved to ('' if there was none)."""
+def restore(home: Home, rclone: Rclone, zip_path: str, report=print, force=False, clock=time.time, upload=False) -> str:
+    """Returns the folder the previous world was moved to ('' if there was none). upload=True also uploads the restored
+    world as the new shared world and gives the lock back, so no button presses are needed."""
     check_zip(zip_path)
     settings = home.settings()
     if not settings.get("SHARED_REMOTE"):
@@ -135,6 +136,7 @@ def restore(home: Home, rclone: Rclone, zip_path: str, report=print, force=False
         with open(os.path.join(home.server_dir, RESTORE_MARKER), "w") as f:
             f.write("This world was put back from a backup on purpose: the next upload may replace a bigger shared world.")
         world.acquire(takeover=force, claim_wait=0)         # the lock now says: this PC hosts (and keeps its own world)
+        world.mark_local_version(world.shared_version())    # a restore is on purpose: it may replace the newest upload
     except Exception:
         shutil.rmtree(target, ignore_errors=True)           # put things back as they were
         try:
@@ -145,6 +147,15 @@ def restore(home: Home, rclone: Rclone, zip_path: str, report=print, force=False
             os.rename(moved, target)
         raise
     report("The backup is now this PC's world and this PC holds the hosting lock.")
+    if upload:
+        report("Uploading it as the shared world. This takes a few minutes...")
+        try:
+            count, nbytes = world.push()
+        except Exception as exc:                            # the world is restored here and the lock is kept: retry in the app
+            raise RestoreError(f"The world was restored on this PC, but the upload failed: {exc}. Open SMP Host, press "
+                               "Start hosting and then Stop hosting to upload it.") from None
+        world.release()
+        report(f"Uploaded ({count} files, {nbytes / 1048576:.0f} MB) and the lock is free for the next host.")
     return moved
 
 
@@ -152,15 +163,19 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Restore a world backup as the shared world.")
     parser.add_argument("--zip", required=True, help="a world-....zip from the SMP Host backups folder")
     parser.add_argument("--force", action="store_true", help="take over a lock that a PC left behind")
+    parser.add_argument("--upload", action="store_true", help="also upload the restored world as the shared world")
     args = parser.parse_args(argv)
     home, tools = Home(), find_tools()
     try:
-        restore(home, Rclone(tools.rclone or "rclone"), args.zip, force=args.force)
+        restore(home, Rclone(tools.rclone or "rclone"), args.zip, force=args.force, upload=args.upload)
     except (RestoreError, HostingError, RcloneError) as exc:
         print(f"\nStopped: {exc}", file=sys.stderr)
         return 1
-    print("\nNext: open SMP Host, press Start hosting (it keeps this world), then Stop hosting and wait for 'Done'.\n"
-          "That uploads the restored world for everyone.")
+    if args.upload:
+        print("\nDone: the restored world is the shared world now. Anyone can host it.")
+    else:
+        print("\nNext: open SMP Host, press Start hosting (it keeps this world), then Stop hosting and wait for 'Done'.\n"
+              "That uploads the restored world for everyone.")
     return 0
 
 

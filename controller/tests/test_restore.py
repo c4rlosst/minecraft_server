@@ -87,6 +87,16 @@ class RestoreTests(unittest.TestCase):
         history = os.listdir(os.path.join(self.cloud, "history"))
         self.assertTrue(history)                                  # the version it replaced is kept for a few days
 
+    def test_restoring_with_upload_publishes_the_world_and_frees_the_lock_in_one_go(self):
+        restore.restore(self.home, self.rclone, self.zip, report=self.said.append, upload=True)
+        self.assertEqual(read(os.path.join(self.cloud, "data", "world", "level.dat")), "a-level")      # even with fewer players
+        state = json.loads(read(os.path.join(self.cloud, "state.json")))
+        self.assertEqual((state["status"], state["version"]), ("idle", 2))
+        self.assertIn("Uploaded", self.said[-1])
+        world = RcloneWorld(self.home.settings()["SHARED_REMOTE"], self.home.server_dir, "Ethan", self.rclone)
+        self.assertEqual(world.local_version(), 2)                                   # this PC's copy is the newest upload
+        self.assertFalse(os.path.exists(os.path.join(self.home.server_dir, RESTORE_MARKER)))
+
     def test_a_live_host_blocks_the_restore(self):
         state = json.loads(read(os.path.join(self.cloud, "state.json")))
         write(os.path.join(self.cloud, "state.json"), json.dumps(dict(state, status="hosting", host="B", lastSeen=9e9)))

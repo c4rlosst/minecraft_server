@@ -92,7 +92,27 @@ class Rclone:
         """The file's contents, or None if it doesn't exist. Some storage (Backblaze B2) answers a missing file with
         'success, nothing': none of the files we read are ever empty, so an empty answer also means 'not there'."""
         done = self._call("cat", remote_path, timeout=120, ok=(0, *NOT_FOUND))
-        return done.stdout if done.returncode == 0 and done.stdout else None
+        if done.returncode == 0 and done.stdout:
+            return done.stdout
+        if done.returncode == 0 and self._exists(remote_path):
+            # An empty answer for a file that IS there is not 'missing': the storage refused the download (Backblaze's free
+            # daily download limit does this). Treating it as missing would make a PC think the shared world is brand new.
+            raise RcloneError("Cannot download: the storage returned nothing for a file that exists, so the free daily "
+                              "download limit is used up (download_cap_exceeded)")
+        return None
+
+    def _exists(self, remote_path: str) -> bool:
+        """Does this file exist? Asked by listing its folder (a listing still works when downloads are refused)."""
+        cut = max(remote_path.rfind("/"), remote_path.rfind(chr(92)), remote_path.rfind(":"))
+        parent, name = remote_path[:cut + 1] if remote_path[cut] == ":" else remote_path[:cut], remote_path[cut + 1:]
+        return any(e.get("Name") == name and not e.get("IsDir") for e in self.lsjson(parent, files_only=True))
+
+    def check(self, src: str, dst: str, excludes=()) -> bool:
+        """True when every file in src is in dst with the same size (extra files in dst don't matter). Only lists."""
+        args = ["check", src, dst, "--one-way", "--size-only", "--fast-list"]
+        for pattern in excludes:
+            args += ["--exclude", pattern]
+        return self._call(*args, timeout=900, ok=(0, 1)).returncode == 0
 
     def put(self, remote_path: str, data: bytes) -> None:
         self._call("rcat", remote_path, data=data, timeout=120)
@@ -113,29 +133,37 @@ class Rclone:
         return json.loads(done.stdout or b"[]") if done.returncode == 0 else []
 
     def sync(self, src: str, dst: str, excludes=(), backup_dir: str | None = None, transfers: int = 8,
-             progress=None) -> None:
-        """Make dst identical to src. With backup_dir, files that get replaced or deleted are kept there."""
-        args = ["sync", src, dst, "--transfers", str(transfers), "--checkers", "16", "--fast-list"]
+             progress=None, bwlimit: str | None = None) -> None:
+        """Make dst identical to src. With backup_dir, files that get replaced or deleted are kept there.
+        Files are compared by their CONTENT (--checksum), not by size and modified time: Windows can leave a world file's
+        modified time unchanged after the Minecraft server rewrote it, and a size+time comparison then skips the change
+        silently (the shared world ends up missing it)."""
+        args = ["sync", src, dst, "--transfers", str(transfers), "--checkers", "16", "--fast-list", "--checksum"]
         for pattern in excludes:
             args += ["--exclude", pattern]
         if backup_dir:
             args += ["--backup-dir", backup_dir]
+        if bwlimit:
+            args += ["--bwlimit", bwlimit]                  # e.g. "2M": don't use up the players' connection
         self._run(*args, progress=progress)
 
     def copy(self, src: str, dst: str, excludes=(), transfers: int = 8) -> None:
         """Copy everything from src into dst (between two different storages too). Never deletes anything."""
-        args = ["copy", src, dst, "--transfers", str(transfers), "--checkers", "16", "--fast-list"]
+        args = ["copy", src, dst, "--transfers", str(transfers), "--checkers", "16", "--fast-list", "--checksum"]
         for pattern in excludes:
             args += ["--exclude", pattern]
         self._call(*args, timeout=4 * 3600)
 
-    def copy_files(self, src: str, dst: str, names, backup_dir: str | None = None, progress=None) -> None:
+    def copy_files(self, src: str, dst: str, names, backup_dir: str | None = None, progress=None,
+                   bwlimit: str | None = None) -> None:
         """Copy only these files from the top level of src (the ones that exist), never deleting anything."""
-        args = ["copy", src, dst, "--max-depth", "1"]
+        args = ["copy", src, dst, "--max-depth", "1", "--checksum"]
         for name in names:
             args += ["--include", "/" + name]
         if backup_dir:
             args += ["--backup-dir", backup_dir]
+        if bwlimit:
+            args += ["--bwlimit", bwlimit]
         self._run(*args, progress=progress)
 
     def purge(self, remote_path: str) -> None:

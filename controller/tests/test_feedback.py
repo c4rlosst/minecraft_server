@@ -52,14 +52,34 @@ class BlockedWordingTests(unittest.TestCase):
 
 class BarCaptionTests(unittest.TestCase):
     def test_a_transfer_shows_how_much_has_moved(self):
-        label, fraction, detail = feedback.bar_text({"label": "Uploading the world", "fraction": 0.5,
-                                                    "bytes": 310 * 1048576, "files": 180})
-        self.assertEqual((label, fraction), ("Uploading the world", 0.5))
+        label, fraction, detail, span, since = feedback.bar_text({"label": "Uploading the world", "fraction": 0.5,
+                                                                 "bytes": 310 * 1048576, "files": 180})
+        self.assertEqual((label, fraction, span), ("Uploading the world", 0.5, None))
         self.assertEqual(detail, "310.0 MB transferred  -  180 files")
 
     def test_a_step_without_numbers_pulses(self):
-        label, fraction, _detail = feedback.bar_text({"label": "Taking the hosting lock...", "fraction": None})
-        self.assertEqual((label, fraction), ("Taking the hosting lock...", None))
+        label, fraction, _detail, span, since = feedback.bar_text(
+            {"label": "Taking the hosting lock...", "fraction": None, "span": [0.0, 0.08], "stepStarted": 100.0})
+        self.assertEqual((label, fraction, span, since), ("Taking the hosting lock...", None, (0.0, 0.08), 100.0))
+
+
+class BarMotionTests(unittest.TestCase):
+    def test_a_step_without_numbers_creeps_forward_inside_its_slice(self):
+        values = [feedback.creep(0.0, 0.08, since=0.0, now=t) for t in (0, 1, 3, 6, 12, 60)]
+        self.assertEqual(values, sorted(values))                                  # always moving forward
+        self.assertEqual(values[0], 0.0)
+        self.assertLess(values[-1], 0.08 + 1e-9)                                  # and never reaching the next step early
+        self.assertGreater(values[3], 0.04)                                       # but not stuck at the start either
+
+    def test_the_drawn_value_glides_to_the_real_one(self):
+        shown, steps = 0.0, 0
+        while shown < 0.99 and steps < 200:
+            nxt = feedback.ease(shown, 1.0, 0.033)
+            self.assertGreater(nxt, shown)                                        # every frame moves on
+            shown, steps = nxt, steps + 1
+        self.assertLess(steps, 60)                                                # about 1.5 seconds at 30 frames a second
+        self.assertEqual(feedback.ease(0.5, 0.45, 0.033), 0.5)                    # a small step back is ignored
+        self.assertEqual(feedback.ease(0.9, 0.0, 0.033), 0.0)                     # a new job starts from the beginning
 
 
 if __name__ == "__main__":

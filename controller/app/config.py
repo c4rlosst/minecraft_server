@@ -41,6 +41,8 @@ class Config:
     mc_memory: str = "6G"
     backup_dir: str = ""
     backups_keep: int = 14
+    checkpoint_minutes: int = 20          # save the world to the shared storage this often while hosting (0 = off)
+    checkpoint_bwlimit: str = "2M"        # upload speed limit for a checkpoint, MiB/s (so players' connection isn't used up)
     discord_token: str = ""
     discord_guild_id: int = 0
     discord_role_id: int = 0
@@ -54,7 +56,7 @@ class Config:
     shared_skip_checks: bool = False   # upload even when this PC's world looks incomplete or wrong
     host_name: str = ""
     takeover: bool = False             # take over a lock left by a crashed host (loses its un-uploaded progress)
-    claim_wait: int = 20               # seconds to wait after claiming the lock, to catch a simultaneous claim
+    claim_wait: int = 8                # seconds to wait after claiming the lock, to catch a simultaneous claim
     playit_exe: str = ""               # shared hosting: the controller starts/stops this agent itself, after taking the lock
     playit_secret_path: str = ""       # set: PLAYIT_EXE is playitd.exe, run as our own process with this secret file
     voice_host: str = ""               # "auto" (use this PC's public IP), "off", "host:port", or "" (don't touch)
@@ -110,6 +112,8 @@ class Config:
             mc_memory=env("MC_MEMORY", "6G"),
             backup_dir=env("BACKUP_DIR", ""),
             backups_keep=_int("BACKUPS_KEEP", 14),
+            checkpoint_minutes=_int("CHECKPOINT_MINUTES", 20),
+            checkpoint_bwlimit=env("CHECKPOINT_BWLIMIT", "2M"),
             discord_token=env("DISCORD_TOKEN", ""),
             discord_guild_id=_int("DISCORD_GUILD_ID", 0),
             discord_role_id=_int("DISCORD_ROLE_ID", 0),
@@ -122,7 +126,7 @@ class Config:
             shared_skip_checks=env("SHARED_SKIP_CHECKS", "") == "1",
             host_name=env("HOST_NAME", "").strip(),
             takeover=env("TAKEOVER", "") == "1",
-            claim_wait=_int("CLAIM_WAIT", 20),
+            claim_wait=_int("CLAIM_WAIT", 8),
             playit_exe=env("PLAYIT_EXE", "").strip(),
             playit_secret_path=env("PLAYIT_SECRET_PATH", "").strip(),
             voice_host=env("VOICE_HOST", "").strip(),

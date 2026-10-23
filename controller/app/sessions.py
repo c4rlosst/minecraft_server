@@ -68,6 +68,23 @@ def line(entry: dict, now: float = None) -> str:
     return f"{entry.get('host', '?')}: {when(entry, now)}{note}"
 
 
+def row(entry: dict, now: float = None, host_width: int = 18) -> str:
+    """One line of the history list, in columns: 'ChrisTzy was h...  Fri 23 Oct 2:13 AM-6:07 AM  3 h 53 min  !'
+    (the ! marks a session whose end was never recorded)."""
+    start, end = float(entry["start"]), entry.get("end")
+    host = str(entry.get("host", "?"))
+    if len(host) > host_width:
+        host = host[:host_width - 3] + "..."
+    if end is None:
+        until, length, flag = "now", duration((now or start) - start), ""
+    else:
+        end = float(end)
+        until = _clock(end) if _day(start) == _day(end) else f"{_day(end)} {_clock(end)}"
+        length = duration(end - start)
+        flag = "  !" if entry.get("ended") == NO_STOP else ""
+    return f"{host:<{host_width}}  {_day(start)} {_clock(start)}-{until}  {length}{flag}"
+
+
 def session_at(sessions: list, ts: float):
     """The session a moment (a backup's time) falls inside, or None."""
     for entry in reversed(sessions):

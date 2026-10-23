@@ -48,6 +48,7 @@ async def main(app: App):
     # ---- shared hosting: take the lock and fetch the latest world before anything else -------------
     if cfg.shared_dir or cfg.shared_remote:
         from .hosting import Hosting
+        from .progress import keepalive as progress_keepalive
         from .shared import HostingError, build_world, resumed_own_lock
         if cfg.backend != "process":
             log.error("Shared hosting needs the Windows (process) setup.")
@@ -55,22 +56,38 @@ async def main(app: App):
         shared, where = build_world(cfg)
         app.shared = shared
         log.info("Taking the hosting lock in %s ...", where)
-        shared.progress.note("Taking the hosting lock...")
+        shared.progress.start_journey("start")
+        background.append(asyncio.create_task(progress_keepalive(shared.progress)))
+        shared.progress.note("Taking the hosting lock...", step="lock")
         try:
             previous = await asyncio.to_thread(shared.acquire, cfg.takeover, cfg.claim_wait)
         except HostingError as exc:
-            shared.progress.finish()
+            shared.progress.end_journey()
             log.error("%s", exc)
             print(f"\n  CAN'T HOST RIGHT NOW: {exc}\n")
             return
         hosting = app.hosting = Hosting(shared, manager)
+        behind = shared.local_is_behind()       # someone uploaded a newer world than the one this PC's copy is based on
+        if runtime.state(cfg.mc_container) == "running" and behind:
+            shared.progress.end_journey()       # an old server is still running on stale files: starting from here would
+            log.error("A Minecraft server from an earlier session is still running on this PC, and its world is older "
+                      "than the shared one (version %s < %s). Not hosting: close the old server (restart the PC), "
+                      "then start again.", shared.local_version(), shared.shared_version())
+            print("\n  CAN'T HOST RIGHT NOW: an old Minecraft server is still running on this PC. Restart the PC and "
+                  "start again.\n")
+            await asyncio.to_thread(shared.release)
+            return
         if runtime.state(cfg.mc_container) == "running":
             hosting.mark_started()      # a server left running from earlier: upload it when it stops
-        elif resumed_own_lock(previous) and shared.can_keep_local_world():
+        elif resumed_own_lock(previous) and shared.can_keep_local_world() and not behind:
             hosting.mark_started()      # we never uploaded the last session: this PC's world is the newest, keep it
             log.info("Resumed this PC's own lock; keeping the local world (it is newer than the shared copy).")
         elif previous.get("version", 0) > 0:
-            if resumed_own_lock(previous):
+            if resumed_own_lock(previous) and behind:
+                log.warning("Somebody uploaded a newer world (version %s) than this PC's copy is based on (version %s), "
+                            "so this PC's copy is not the newest. Its backup is kept; downloading the newest.",
+                            shared.shared_version(), shared.local_version())
+            elif resumed_own_lock(previous):
                 log.warning("The last download from the shared folder never finished, so this PC's world is incomplete. "
                             "Downloading it again.")
             if cfg.backup_dir and os.path.isdir(os.path.join(cfg.server_dir, "world")):
@@ -82,7 +99,7 @@ async def main(app: App):
             await asyncio.to_thread(identity.sync, shared, cfg.server_dir)
         except Exception as exc:                # never worth blocking the host over
             log.warning("Couldn't sync the server name and picture (%s); using this PC's.", exc)
-        shared.progress.note("Starting the tunnel and the Discord bot...")
+        shared.progress.note("Starting the tunnel and the Discord bot...", step="services")
         if cfg.playit_exe:                      # only the lock holder runs the tunnel (both PCs share one agent identity)
             from .playit import Playit, PlayitDaemon
             if cfg.playit_secret_path:          # the desktop app: our own agent process, no Windows service needed
@@ -93,8 +110,13 @@ async def main(app: App):
             log.info("playit.gg agent: %s", await asyncio.to_thread(app.playit.start))
         manager.host_info = {"shared": True, "host": cfg.host_name}
         background.append(asyncio.create_task(hosting.heartbeat_loop()))
+        if cfg.checkpoint_minutes > 0 and getattr(shared, "supports_checkpoints", False) and cfg.state_dir:
+            background.append(asyncio.create_task(
+                hosting.checkpoint_loop(cfg.checkpoint_minutes, os.path.join(cfg.state_dir, "snapshot"))))
+            log.info("Checkpoints on: while the server runs, the world is saved to the shared storage every %s min.",
+                     cfg.checkpoint_minutes)
         log.info("%s is now hosting.", cfg.host_name)
-        shared.progress.finish()                # ready: the window drops its progress bar
+        shared.progress.end_journey()           # ready: the window drops its progress bar
 
     # ---- hooks around the Minecraft server ----------------------------------------------------------
     backup = None
@@ -105,14 +127,8 @@ async def main(app: App):
             await asyncio.to_thread(make_backup, cfg.server_dir, cfg.backup_dir, cfg.backups_keep)
 
     async def after_stop():
-        if backup:
-            await backup()
-        if hosting:
-            try:
-                await hosting.push_after_stop()
-            except HostingError as exc:
-                # not fatal: the world is safe on this PC, and the next upload / handover tries again and shows this
-                log.error("The world was NOT uploaded to the shared storage: %s", exc)
+        from .hosting import run_after_stop
+        await run_after_stop(backup, hosting)           # the backup zip and the upload together (see there)
     manager.after_stop = after_stop
 
     if identity.apply(cfg):
