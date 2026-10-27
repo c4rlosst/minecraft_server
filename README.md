@@ -7,6 +7,29 @@ A modded Fabric Minecraft server that sleeps when nobody is online and wakes whe
 > **Want an Aternos-style server** (sleeps when empty, wakes when a friend joins, web panel + Discord bot)?
 > See [cloud/README.md](cloud/README.md). The rest of this file is the Windows, run-it-on-a-PC setup.
 
+## SMP Host: friends take turns hosting one world
+
+**SMP Host** is a Windows app (a normal installer, nothing to compile) for a group of friends who share one Minecraft
+world and have no always-on machine. Whoever's turn it is presses **Start hosting**: the app takes a lock, downloads the
+newest world, starts the server and a free playit.gg tunnel, and when they press **Stop hosting** it uploads the world
+and hands over. The world lives in a free [Cloudflare R2](https://developers.cloudflare.com/r2/) bucket, and each friend
+joins with an invite code from the owner.
+
+![SMP Host while a friend is hosting: who has the shared world, the players online, and the server log](docs/images/smp-host-hosting.png)
+
+- **One bar for the whole start and stop**: taking the lock, downloading, starting the server, then saving, uploading,
+  checking and handing over.
+- **Progress is hard to lose**: files are compared by content, the world is saved to the bucket every 20 minutes while
+  people play, an old copy can never overwrite a newer one, and the last 7 days of uploads can be restored.
+- **History** shows who hosted and for how long, with the backups made after each session.
+
+| Getting the world | Setting up a friend's PC | Who hosted, and backups |
+| --- | --- | --- |
+| ![Downloading the world with the progress bar at 53 percent](docs/images/smp-host-downloading.png) | ![The setup screen: paste the invite code, name this PC, accept the EULA](docs/images/smp-host-setup.png) | ![The history window: who hosted when, and the backups to restore](docs/images/smp-host-history.png) |
+
+Download `SMP-Host-Setup.exe` from the [latest release](https://github.com/c4rlosst/minecraft_server/releases/latest), or
+read [HOSTING.md](HOSTING.md) for how it works and how the owner invites friends.
+
 ## Quick start
 
 ```powershell
